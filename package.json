@@ -1,0 +1,62 @@
+{
+  "name": "pi-only-tools",
+  "version": "0.2.0",
+  "description": "A minimal Pi package providing shell_command and apply_patch, plus a TUI editor for Pi's global defaultTools setting.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --check src/index.js && node --check dist/index.js",
+    "test": "node test/test.mjs",
+    "prepack": "npm run build && npm run check"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2",
+    "@earendil-works/pi-tui": ">=0.84.2",
+    "typebox": ">=1.3.7"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "shell-command",
+    "apply-patch",
+    "claude-code",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@earendil-works/pi-tui": "^0.84.2",
+    "typebox": "^1.3.7"
+  }
+}
