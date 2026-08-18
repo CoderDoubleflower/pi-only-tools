@@ -14,7 +14,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node --check src/index.js && node --check dist/index.js",
-    "test": "node test/test.mjs",
+    "test": "node test/test.mjs && node test/render-lines.test.mjs",
     "prepack": "npm run build && npm run check"
   },
   "peerDependencies": {
