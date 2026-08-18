@@ -1,18 +1,22 @@
 import assert from "node:assert/strict";
-import { access, chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 const temp = await mkdtemp(path.join(os.tmpdir(), "pi-only-tools-test-"));
 const agentDir = path.join(temp, "agent");
 process.env.PI_CODING_AGENT_DIR = agentDir;
+process.env.LC_ALL = "en_US.UTF-8";
 process.env.LANG = "en_US.UTF-8";
 
+const { initTheme } = await import("@earendil-works/pi-coding-agent");
+initTheme("dark", false);
 const { default: plugin, __test } = await import("../src/index.js");
 
 const tools = new Map();
 const handlers = new Map();
 const commands = new Map();
+const sessionEntries = [];
 let setActiveToolsCalls = 0;
 let activeTools = ["read", "bash", "edit", "write", "custom_extra"];
 const allTools = [
@@ -43,6 +47,9 @@ const pi = {
     setActiveToolsCalls += 1;
     activeTools = [...names];
   },
+  appendEntry(customType, data) {
+    sessionEntries.push({ type: "custom", customType, data });
+  },
   getAllTools() {
     return [
       ...allTools,
@@ -62,7 +69,7 @@ assert.equal(setActiveToolsCalls, 0, "loading the plugin must not force an activ
 assert.deepEqual(__test.ONLY_TOOLS, ["shell_command", "apply_patch"]);
 assert.ok(commands.has("only-tools"));
 assert.ok(commands.has("pi-only-tools"));
-assert.equal(handlers.size, 0, "the plugin must not register a tool_call blocker or turn-time enforcer");
+assert.deepEqual([...handlers.keys()], ["session_start", "session_tree", "before_agent_start"]);
 assert.deepEqual(__test.getBuiltinTools(pi).map((tool) => tool.name), ["bash", "edit", "read", "write"]);
 assert.equal(__test.getGlobalSettingsPath(), path.join(agentDir, "settings.json"));
 assert.equal(__test.getProjectSettingsPath(temp), path.join(temp, ".pi", "settings.json"));
@@ -93,6 +100,12 @@ assert.equal(settings.theme, "dark");
 assert.deepEqual(settings.retry, { enabled: true });
 assert.deepEqual((await __test.readDefaultToolsSetting()).defaultTools, ["bash", "read"]);
 
+const toolsConfigPath = __test.getToolsConfigPath();
+assert.deepEqual(await __test.writePermanentlyDisabledTools(["custom_extra", "custom_extra"]), ["custom_extra"]);
+assert.deepEqual(await __test.readPermanentlyDisabledTools(), ["custom_extra"]);
+let toolsConfig = JSON.parse(await readFile(toolsConfigPath, "utf8"));
+assert.deepEqual(toolsConfig, { version: 1, permanentlyDisabledTools: ["custom_extra"] });
+
 await __test.writeDefaultToolsSetting(undefined);
 settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
 assert.equal(Object.hasOwn(settings, "defaultTools"), false);
@@ -112,6 +125,36 @@ await mkdir(path.dirname(projectSettingsPath), { recursive: true });
 await writeFile(projectSettingsPath, `${JSON.stringify({ defaultTools: ["read"] }, null, 2)}\n`);
 
 const notifications = [];
+const sessionManager = {
+  getBranch() {
+    return [...sessionEntries];
+  },
+};
+const eventContext = {
+  sessionManager,
+  ui: {
+    notify(message, type) {
+      notifications.push({ message, type });
+    },
+  },
+};
+
+// Migrate the old /tools state formats without changing their paths or custom type.
+sessionEntries.push({
+  type: "custom",
+  customType: "tools-config",
+  data: { enabledTools: [...activeTools] },
+});
+await handlers.get("session_start")[0]({}, eventContext);
+assert.equal(activeTools.includes("custom_extra"), false);
+assert.equal(activeTools.includes("shell_command"), true);
+
+// Reset to an unrestricted state for the TUI interaction tests.
+await __test.writePermanentlyDisabledTools([]);
+sessionEntries.length = 0;
+activeTools = ["read", "bash", "edit", "write", "custom_extra", "shell_command", "apply_patch"];
+await handlers.get("session_start")[0]({}, eventContext);
+
 await commands.get("only-tools").handler("", {
   mode: "print",
   ui: {
@@ -120,7 +163,7 @@ await commands.get("only-tools").handler("", {
     },
   },
 });
-assert.ok(notifications.some((entry) => entry.type === "warning" && /TUI mode/.test(entry.message)));
+assert.ok(notifications.some((entry) => entry.type === "warning" && /TUI/.test(entry.message)));
 
 const theme = {
   fg(_color, text) {
@@ -136,6 +179,7 @@ async function openToolSettings(interact) {
   await commands.get("only-tools").handler("", {
     mode: "tui",
     cwd: temp,
+    sessionManager,
     ui: {
       notify(message, type) {
         notifications.push({ message, type });
@@ -153,9 +197,13 @@ async function openToolSettings(interact) {
   return rendered;
 }
 
-// Disable all detected built-ins (second action row) and keep every non-builtin active tool.
+function moveDown(component, count) {
+  for (let index = 0; index < count; index += 1) component.handleInput("\u001b[B");
+}
+
+// Disable all detected built-ins (third action row) and keep every non-builtin active tool.
 let renderedSettings = await openToolSettings((component) => {
-  component.handleInput("\u001b[B");
+  moveDown(component, 2);
   component.handleInput("\r");
   component.handleInput("\u001b");
 });
@@ -166,10 +214,11 @@ assert.deepEqual(activeTools, ["custom_extra", "shell_command", "apply_patch"]);
 settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
 assert.deepEqual(settings.defaultTools, []);
 assert.equal(settings.theme, "dark");
-await assert.rejects(access(path.join(agentDir, "pi-only-tools.json")), /ENOENT/);
+assert.ok(sessionEntries.some((entry) => entry.customType === "tools-config"));
 
-// Restore official Pi defaults by removing defaultTools (first action row).
+// Restore official Pi defaults by removing defaultTools (second action row).
 renderedSettings = await openToolSettings((component) => {
+  moveDown(component, 1);
   component.handleInput("\r");
   component.handleInput("\u001b");
 });
@@ -179,20 +228,42 @@ for (const name of ["read", "bash", "edit", "write", "custom_extra", "shell_comm
   assert.ok(activeTools.includes(name), `expected ${name} to remain or become active`);
 }
 
-// Toggle one detected built-in (first built-in row, after the three actions).
+// Session-disable one detected built-in (first tool row, after the four actions).
 await openToolSettings((component) => {
-  component.handleInput("\u001b[B");
-  component.handleInput("\u001b[B");
-  component.handleInput("\u001b[B");
+  moveDown(component, 4);
+  component.handleInput("\r");
+  component.handleInput("\u001b");
+});
+settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
+assert.equal(Object.hasOwn(settings, "defaultTools"), false, "session changes must not alter startup defaults");
+assert.equal(activeTools.includes("bash"), false);
+assert.equal(activeTools.includes("custom_extra"), true);
+assert.equal(activeTools.includes("shell_command"), true);
+assert.equal(activeTools.includes("apply_patch"), true);
+
+// Persist the current built-in subset with the first action row.
+await openToolSettings((component) => {
   component.handleInput("\r");
   component.handleInput("\u001b");
 });
 settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
 assert.deepEqual(settings.defaultTools, ["edit", "read", "write"]);
-assert.equal(activeTools.includes("bash"), false);
-assert.equal(activeTools.includes("custom_extra"), true);
-assert.equal(activeTools.includes("shell_command"), true);
-assert.equal(activeTools.includes("apply_patch"), true);
+
+// Permanently disable custom_extra (four actions, four built-ins, then apply_patch and custom_extra).
+await openToolSettings((component) => {
+  moveDown(component, 9);
+  component.handleInput("\r");
+  component.handleInput("\r");
+  component.handleInput("\u001b");
+});
+toolsConfig = JSON.parse(await readFile(toolsConfigPath, "utf8"));
+assert.deepEqual(toolsConfig.permanentlyDisabledTools, ["custom_extra"]);
+assert.equal(activeTools.includes("custom_extra"), false);
+
+// Permanent disables are re-read and enforced before every agent run.
+activeTools.push("custom_extra");
+await handlers.get("before_agent_start")[0]({}, eventContext);
+assert.equal(activeTools.includes("custom_extra"), false);
 
 // Tool execution and Claude-style rendering remain intact.
 const ctx = { cwd: temp };
@@ -209,7 +280,8 @@ assert.equal(shellResult.details.exitCode, 0);
 assert.match(shellResult.content[0].text, /one/);
 assert.ok(shellUpdates.length >= 1);
 const shellCallLines = shell.renderCall({ command: "printf test" }, theme, { cwd: temp }).render(100);
-assert.match(shellCallLines[0], /^⏺ Bash\(/);
+assert.match(shellCallLines[0], /^Bash\(/);
+assert.ok(shellCallLines.every((line) => !line.includes("⏺")));
 const shellRenderLines = shell.renderResult(shellResult, { expanded: false, isPartial: false }, theme, {}).render(100);
 assert.match(shellRenderLines[0], /^  ⎿  one/);
 assert.ok(shellRenderLines.some((line) => line.includes("… +2 lines (ctrl+o to expand)")));
@@ -248,12 +320,13 @@ assert.equal(await readFile(path.join(temp, "foo.txt"), "utf8"), "new\n");
 assert.equal(patchResult.details.patchSummary.additions, 1);
 assert.equal(patchResult.details.patchSummary.removals, 1);
 const patchCallLines = patchTool.renderCall({ patch: patchText }, theme, { cwd: temp }).render(100);
-assert.equal(patchCallLines[0], "⏺ Update(foo.txt)");
+assert.equal(patchCallLines[0], "Update(foo.txt)");
+assert.ok(patchCallLines.every((line) => !line.includes("⏺")));
 const patchRenderLines = patchTool.renderResult(patchResult, { expanded: false, isPartial: false }, theme, {}).render(100);
 assert.match(patchRenderLines[0], /^  ⎿  Added 1 line, removed 1 line/);
 assert.ok(patchRenderLines.some((line) => line.includes("1 -old")));
 assert.ok(patchRenderLines.some((line) => line.includes("1 +new")));
 assert.ok(!patchRenderLines.some((line) => line.includes("@@")));
 
-assert.ok(notifications.some((entry) => entry.type === "info" && /Updated Pi global settings\.json/.test(entry.message)));
+assert.ok(notifications.some((entry) => entry.type === "info" && /Tool settings updated|工具设置已更新/.test(entry.message)));
 console.log("pi-only-tools tests passed");

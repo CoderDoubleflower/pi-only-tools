@@ -9,7 +9,9 @@ import { SettingsList, truncateToWidth } from "@earendil-works/pi-tui";
 
 const ONLY_TOOLS = Object.freeze(["shell_command", "apply_patch"]);
 const PI_STANDARD_DEFAULT_TOOLS = Object.freeze(["read", "bash", "edit", "write"]);
-const BUILTIN_ITEM_PREFIX = "builtin:";
+const TOOLS_STATE_ENTRY = "tools-config";
+const TOOL_ITEM_PREFIX = "tool:";
+const ACTION_SAVE_CURRENT = "__save_current_builtins__";
 const ACTION_USE_PI_DEFAULTS = "__use_pi_defaults__";
 const ACTION_DISABLE_ALL = "__disable_all_builtins__";
 const ACTION_ENABLE_ALL = "__enable_all_builtins__";
@@ -453,16 +455,15 @@ function commandPreview(command) {
 
 function claudeCallComponent(name, valueLines, theme) {
   return new DynamicLinesComponent((width) => {
-    const bullet = theme.fg("toolTitle", "⏺");
     const title = theme.fg("toolTitle", theme.bold(name));
     const open = theme.fg("muted", "(");
     const close = theme.fg("muted", ")");
     const lines = valueLines.length > 0 ? valueLines : ["…"];
     if (lines.length === 1) {
-      return [truncateToWidth(`${bullet} ${title}${open}${theme.fg("toolOutput", lines[0])}${close}`, width, "…")];
+      return [truncateToWidth(`${title}${open}${theme.fg("toolOutput", lines[0])}${close}`, width, "…")];
     }
-    const first = truncateToWidth(`${bullet} ${title}${open}${theme.fg("toolOutput", lines[0])}`, width, "…");
-    const indent = " ".repeat(name.length + 4);
+    const first = truncateToWidth(`${title}${open}${theme.fg("toolOutput", lines[0])}`, width, "…");
+    const indent = " ".repeat(name.length + 2);
     const rest = lines.slice(1).map((line, index) => {
       const suffix = index === lines.length - 2 ? close : "";
       return truncateToWidth(`${indent}${theme.fg("toolOutput", line)}${suffix}`, width, "…");
@@ -838,6 +839,10 @@ function getGlobalSettingsPath() {
   return path.join(getAgentDir(), "settings.json");
 }
 
+function getToolsConfigPath() {
+  return path.join(getAgentDir(), "tools.json");
+}
+
 function getProjectSettingsPath(cwd) {
   return path.join(cwd, CONFIG_DIR_NAME, "settings.json");
 }
@@ -921,6 +926,55 @@ async function writeDefaultToolsSetting(defaultTools, settingsPath = getGlobalSe
   }
 }
 
+async function readPermanentlyDisabledTools(configPath = getToolsConfigPath()) {
+  try {
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+      throw new Error("config root must be a JSON object");
+    }
+    if (!Array.isArray(config.permanentlyDisabledTools)) {
+      throw new Error("permanentlyDisabledTools must be an array");
+    }
+    return normalizeToolNameList(config.permanentlyDisabledTools);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") return [];
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not read ${configPath}: ${message}`);
+  }
+}
+
+async function writePermanentlyDisabledTools(names, configPath = getToolsConfigPath()) {
+  await mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+  const release = await acquireSettingsLock(configPath);
+  try {
+    const permanentlyDisabledTools = normalizeToolNameList(names).sort((a, b) => a.localeCompare(b, "en"));
+    await writeFile(
+      configPath,
+      `${JSON.stringify({ version: 1, permanentlyDisabledTools }, null, 2)}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+    return permanentlyDisabledTools;
+  } finally {
+    await release();
+  }
+}
+
+function getAllManagedTools(pi) {
+  const byName = new Map();
+  for (const tool of pi.getAllTools?.() ?? []) {
+    if (!tool || typeof tool.name !== "string" || tool.name.trim() === "") continue;
+    byName.set(tool.name, {
+      name: tool.name,
+      description: typeof tool.description === "string" ? tool.description : "",
+      isBuiltin: tool.sourceInfo?.source === "builtin",
+    });
+  }
+  return [...byName.values()].sort((left, right) => {
+    if (left.isBuiltin !== right.isBuiltin) return left.isBuiltin ? -1 : 1;
+    return left.name.localeCompare(right.name, "en");
+  });
+}
+
 function getBuiltinTools(pi) {
   const byName = new Map();
   for (const tool of pi.getAllTools?.() ?? []) {
@@ -980,51 +1034,63 @@ function isChineseLocale() {
 function settingsCopy() {
   if (isChineseLocale()) {
     return {
-      title: "Pi 内置工具",
-      subtitle: "选择 Pi 启动时默认启用的内置工具；扩展和 SDK 自定义工具不受影响。",
+      title: "工具管理",
+      subtitle: "管理全部工具的会话状态、永久禁用状态和内置工具启动默认值。",
       enabled: "启用",
-      disabled: "禁用",
+      disabled: "禁用（当前会话）",
+      permanentlyDisabled: "禁用（永久）",
       run: "执行",
+      saveCurrent: "将当前内置工具设为启动默认值",
       useDefaults: "恢复 Pi 标准默认值",
       disableAll: "禁用全部内置工具",
       enableAll: "启用全部内置工具",
+      saveCurrentDescription: "把当前启用的内置工具写入全局 settings.json 的 defaultTools。",
       useDefaultsDescription: "删除全局 settings.json 中的 defaultTools，让 Pi 使用标准默认工具集。",
-      disableAllDescription: "把 defaultTools 写为空数组；扩展和 SDK 自定义工具仍保持启用。",
-      enableAllDescription: "把当前检测到的所有 Pi 内置工具写入 defaultTools。",
+      disableAllDescription: "立即禁用全部内置工具，并把 defaultTools 写为空数组。",
+      enableAllDescription: "立即启用全部内置工具，清除其永久禁用状态，并写入 defaultTools。",
       closeHint: "Esc：保存并关闭",
-      noBuiltins: "没有检测到 Pi 内置工具。",
+      noTools: "没有检测到可管理的工具。",
       requiresTui: "该设置界面只能在 Pi TUI 模式中打开。",
-      saved: "已写入 Pi 全局 settings.json",
+      saved: "工具设置已更新",
       readError: "读取 Pi settings.json 失败",
       saveError: "写入 Pi settings.json 失败",
+      toolsReadError: "读取永久工具设置失败",
+      toolsSaveError: "写入永久工具设置失败",
       projectOverride: "当前项目的 .pi/settings.json 含有 defaultTools，会在下次启动时覆盖全局值。",
       modeDefaults: "Pi 默认值",
       modeCustom: "全局自定义",
-      status: (enabled, total, mode) => `${enabled}/${total} 个内置工具已启用 · ${mode}`,
+      status: (enabled, total, permanent, mode) =>
+        `${enabled}/${total} 个工具已启用 · ${permanent} 个永久禁用 · 内置启动配置：${mode}`,
     };
   }
   return {
-    title: "Pi built-in tools",
-    subtitle: "Choose the built-in tools Pi enables at startup. Extension and SDK custom tools are unaffected.",
+    title: "Tool configuration",
+    subtitle: "Manage session state, permanent disables, and startup defaults for Pi built-in tools.",
     enabled: "Enabled",
-    disabled: "Disabled",
+    disabled: "Disabled (session)",
+    permanentlyDisabled: "Disabled (permanent)",
     run: "Run",
+    saveCurrent: "Use current built-ins as startup defaults",
     useDefaults: "Restore Pi standard defaults",
     disableAll: "Disable all built-ins",
     enableAll: "Enable all built-ins",
+    saveCurrentDescription: "Write the currently enabled built-in tools to defaultTools in global settings.json.",
     useDefaultsDescription: "Remove defaultTools from global settings.json so Pi uses its standard built-in defaults.",
-    disableAllDescription: "Write an empty defaultTools array. Extension and SDK custom tools remain enabled.",
-    enableAllDescription: "Write every currently detected Pi built-in tool to defaultTools.",
+    disableAllDescription: "Disable all built-ins now and write an empty defaultTools array.",
+    enableAllDescription: "Enable all built-ins now, clear their permanent disables, and write them to defaultTools.",
     closeHint: "Esc: save and close",
-    noBuiltins: "No Pi built-in tools were detected.",
+    noTools: "No tools were detected.",
     requiresTui: "This settings screen is available only in Pi TUI mode.",
-    saved: "Updated Pi global settings.json",
+    saved: "Tool settings updated",
     readError: "Failed to read Pi settings.json",
     saveError: "Failed to update Pi settings.json",
+    toolsReadError: "Failed to read permanent tool settings",
+    toolsSaveError: "Failed to update permanent tool settings",
     projectOverride: "This project's .pi/settings.json contains defaultTools and will override the global value on next startup.",
     modeDefaults: "Pi defaults",
     modeCustom: "Global custom",
-    status: (enabled, total, mode) => `${enabled}/${total} built-in tools enabled · ${mode}`,
+    status: (enabled, total, permanent, mode) =>
+      `${enabled}/${total} tools enabled · ${permanent} permanently disabled · built-in startup: ${mode}`,
   };
 }
 
@@ -1153,6 +1219,60 @@ export default function piOnlyTools(pi) {
     },
   });
 
+  let enabledTools = new Set();
+  let permanentlyDisabledTools = new Set();
+  let managedTools = [];
+
+  const applyManagedTools = () => {
+    const available = new Set(managedTools.map((tool) => tool.name));
+    const next = [...enabledTools].filter(
+      (name) => available.has(name) && !permanentlyDisabledTools.has(name),
+    );
+    return setActiveToolsIfChanged(pi, next);
+  };
+
+  const persistSessionState = () => {
+    pi.appendEntry?.(TOOLS_STATE_ENTRY, { enabledTools: [...enabledTools] });
+  };
+
+  const restoreToolState = async (ctx) => {
+    const copy = settingsCopy();
+    managedTools = getAllManagedTools(pi);
+    try {
+      permanentlyDisabledTools = new Set(await readPermanentlyDisabledTools());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`${copy.toolsReadError}: ${message}`, "error");
+      permanentlyDisabledTools = new Set();
+    }
+
+    let savedTools;
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      if (entry.type !== "custom" || entry.customType !== TOOLS_STATE_ENTRY) continue;
+      if (Array.isArray(entry.data?.enabledTools)) savedTools = normalizeToolNameList(entry.data.enabledTools);
+    }
+
+    const available = new Set(managedTools.map((tool) => tool.name));
+    enabledTools = new Set(
+      (savedTools ?? pi.getActiveTools?.() ?? []).filter((name) => available.has(name)),
+    );
+    applyManagedTools();
+  };
+
+  pi.on?.("session_start", async (_event, ctx) => restoreToolState(ctx));
+  pi.on?.("session_tree", async (_event, ctx) => restoreToolState(ctx));
+  pi.on?.("before_agent_start", async (_event, ctx) => {
+    const copy = settingsCopy();
+    try {
+      permanentlyDisabledTools = new Set(await readPermanentlyDisabledTools());
+      const active = pi.getActiveTools?.() ?? [];
+      setActiveToolsIfChanged(pi, active.filter((name) => !permanentlyDisabledTools.has(name)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`${copy.toolsReadError}: ${message}`, "error");
+    }
+  });
+
   const openSettings = async (ctx) => {
     const copy = settingsCopy();
     if (ctx.mode !== "tui") {
@@ -1161,8 +1281,19 @@ export default function piOnlyTools(pi) {
     }
 
     const builtins = getBuiltinTools(pi);
-    if (builtins.length === 0) {
-      ctx.ui.notify(copy.noBuiltins, "warning");
+    managedTools = getAllManagedTools(pi);
+    if (managedTools.length === 0) {
+      ctx.ui.notify(copy.noTools, "warning");
+      return;
+    }
+
+    for (const name of pi.getActiveTools?.() ?? []) enabledTools.add(name);
+
+    try {
+      permanentlyDisabledTools = new Set(await readPermanentlyDisabledTools());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      ctx.ui.notify(`${copy.toolsReadError}: ${message}`, "error");
       return;
     }
 
@@ -1196,29 +1327,49 @@ export default function piOnlyTools(pi) {
     );
     let dirty = false;
     let saveFailed = false;
-    let saveQueue = Promise.resolve();
+    let settingsSaveQueue = Promise.resolve();
+    let toolsSaveQueue = Promise.resolve();
 
-    const persistedSelection = () => {
-      if (usePiDefaults) return undefined;
-      return [...new Set([...unknownConfiguredNames, ...enabledBuiltins])].sort((a, b) => a.localeCompare(b, "en"));
-    };
-
-    const scheduleSave = () => {
-      const snapshot = persistedSelection();
-      saveQueue = saveQueue
+    const scheduleSettingsSave = (selection) => {
+      const snapshot = selection === undefined
+        ? undefined
+        : [...new Set([...unknownConfiguredNames, ...selection])].sort((a, b) => a.localeCompare(b, "en"));
+      settingsSaveQueue = settingsSaveQueue
         .then(() => writeDefaultToolsSetting(snapshot, globalSettingsPath))
         .catch((error) => {
           saveFailed = true;
           const message = error instanceof Error ? error.message : String(error);
           ctx.ui.notify(`${copy.saveError}: ${message}`, "error");
         });
-      return saveQueue;
+      return settingsSaveQueue;
+    };
+
+    const scheduleToolsSave = () => {
+      const snapshot = [...permanentlyDisabledTools];
+      toolsSaveQueue = toolsSaveQueue
+        .then(() => writePermanentlyDisabledTools(snapshot))
+        .catch((error) => {
+          saveFailed = true;
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.ui.notify(`${copy.toolsSaveError}: ${message}`, "error");
+        });
+      return toolsSaveQueue;
     };
 
     await ctx.ui.custom((tui, theme, _keybindings, done) => {
       let settingsList;
-      const valuesFor = (name) => (enabledBuiltins.has(name) ? copy.enabled : copy.disabled);
+      const valuesFor = (name) => {
+        if (permanentlyDisabledTools.has(name)) return copy.permanentlyDisabled;
+        return enabledTools.has(name) ? copy.enabled : copy.disabled;
+      };
       const items = [
+        {
+          id: ACTION_SAVE_CURRENT,
+          label: copy.saveCurrent,
+          currentValue: copy.run,
+          values: [copy.run],
+          description: copy.saveCurrentDescription,
+        },
         {
           id: ACTION_USE_PI_DEFAULTS,
           label: copy.useDefaults,
@@ -1240,34 +1391,50 @@ export default function piOnlyTools(pi) {
           values: [copy.run],
           description: copy.enableAllDescription,
         },
-        ...builtins.map((tool) => ({
-          id: `${BUILTIN_ITEM_PREFIX}${tool.name}`,
+        ...managedTools.map((tool) => ({
+          id: `${TOOL_ITEM_PREFIX}${tool.name}`,
           label: tool.name,
           currentValue: valuesFor(tool.name),
-          values: [copy.enabled, copy.disabled],
+          values: [copy.enabled, copy.disabled, copy.permanentlyDisabled],
           description: tool.description,
         })),
       ];
 
       const updateAllRows = () => {
-        for (const tool of builtins) {
-          settingsList.updateValue(`${BUILTIN_ITEM_PREFIX}${tool.name}`, valuesFor(tool.name));
+        for (const tool of managedTools) {
+          settingsList.updateValue(`${TOOL_ITEM_PREFIX}${tool.name}`, valuesFor(tool.name));
         }
       };
 
-      const commitChange = () => {
+      const commitChange = ({ savePermanent = false, saveSession = true } = {}) => {
         dirty = true;
-        applyBuiltinSelection(pi, builtins, enabledBuiltins);
-        void scheduleSave();
+        applyManagedTools();
+        if (saveSession) persistSessionState();
+        if (savePermanent) void scheduleToolsSave();
         tui.requestRender?.();
       };
 
       const onChange = (id, newValue) => {
+        if (id === ACTION_SAVE_CURRENT) {
+          usePiDefaults = false;
+          enabledBuiltins = new Set(
+            builtins
+              .map((tool) => tool.name)
+              .filter((name) => enabledTools.has(name) && !permanentlyDisabledTools.has(name)),
+          );
+          void scheduleSettingsSave(enabledBuiltins);
+          commitChange({ saveSession: false });
+          return;
+        }
         if (id === ACTION_USE_PI_DEFAULTS) {
           usePiDefaults = true;
           unknownConfiguredNames = [];
           enabledBuiltins = new Set(standardDefaultBuiltinNames(builtins));
+          const builtinNames = new Set(builtins.map((tool) => tool.name));
+          enabledTools = new Set([...enabledTools].filter((name) => !builtinNames.has(name)));
+          for (const name of enabledBuiltins) enabledTools.add(name);
           updateAllRows();
+          void scheduleSettingsSave(undefined);
           commitChange();
           return;
         }
@@ -1275,7 +1442,10 @@ export default function piOnlyTools(pi) {
           usePiDefaults = false;
           unknownConfiguredNames = [];
           enabledBuiltins = new Set();
+          const builtinNames = new Set(builtins.map((tool) => tool.name));
+          enabledTools = new Set([...enabledTools].filter((name) => !builtinNames.has(name)));
           updateAllRows();
+          void scheduleSettingsSave(enabledBuiltins);
           commitChange();
           return;
         }
@@ -1283,21 +1453,33 @@ export default function piOnlyTools(pi) {
           usePiDefaults = false;
           unknownConfiguredNames = [];
           enabledBuiltins = new Set(builtins.map((tool) => tool.name));
+          for (const name of enabledBuiltins) {
+            enabledTools.add(name);
+            permanentlyDisabledTools.delete(name);
+          }
           updateAllRows();
-          commitChange();
+          void scheduleSettingsSave(enabledBuiltins);
+          commitChange({ savePermanent: true });
           return;
         }
-        if (!id.startsWith(BUILTIN_ITEM_PREFIX)) return;
+        if (!id.startsWith(TOOL_ITEM_PREFIX)) return;
 
-        const name = id.slice(BUILTIN_ITEM_PREFIX.length);
-        usePiDefaults = false;
-        if (newValue === copy.enabled) enabledBuiltins.add(name);
-        else enabledBuiltins.delete(name);
-        commitChange();
+        const name = id.slice(TOOL_ITEM_PREFIX.length);
+        if (newValue === copy.enabled) {
+          permanentlyDisabledTools.delete(name);
+          enabledTools.add(name);
+        } else if (newValue === copy.disabled) {
+          permanentlyDisabledTools.delete(name);
+          enabledTools.delete(name);
+        } else {
+          permanentlyDisabledTools.add(name);
+          enabledTools.delete(name);
+        }
+        commitChange({ savePermanent: true });
       };
 
       const close = () => {
-        void saveQueue.finally(() => done(undefined));
+        void Promise.all([settingsSaveQueue, toolsSaveQueue]).finally(() => done(undefined));
       };
 
       settingsList = new SettingsList(
@@ -1314,7 +1496,15 @@ export default function piOnlyTools(pi) {
         const lines = [
           theme.bold(copy.title),
           theme.fg("dim", copy.subtitle),
-          theme.fg("muted", `${copy.status(enabledBuiltins.size, builtins.length, mode)} · ${globalSettingsPath}`),
+          theme.fg(
+            "muted",
+            `${copy.status(
+              [...enabledTools].filter((name) => !permanentlyDisabledTools.has(name)).length,
+              managedTools.length,
+              permanentlyDisabledTools.size,
+              mode,
+            )} · ${globalSettingsPath}`,
+          ),
         ];
         if (projectOverridesGlobal) lines.push(theme.fg("warning", copy.projectOverride));
         lines.push(theme.fg("muted", copy.closeHint));
@@ -1322,12 +1512,12 @@ export default function piOnlyTools(pi) {
       });
     });
 
-    await saveQueue;
-    if (dirty && !saveFailed) ctx.ui.notify(`${copy.saved}: ${globalSettingsPath}`, "info");
+    await Promise.all([settingsSaveQueue, toolsSaveQueue]);
+    if (dirty && !saveFailed) ctx.ui.notify(copy.saved, "info");
   };
 
   pi.registerCommand("only-tools", {
-    description: "Configure Pi's global defaultTools setting",
+    description: "Manage active tools, permanent disables, and built-in startup defaults",
     handler: async (_args, ctx) => openSettings(ctx),
   });
   pi.registerCommand("pi-only-tools", {
@@ -1341,13 +1531,17 @@ export const __test = {
   ONLY_TOOLS,
   PI_STANDARD_DEFAULT_TOOLS,
   applyBuiltinSelection,
+  getAllManagedTools,
   getBuiltinTools,
   getGlobalSettingsPath,
   getProjectSettingsPath,
+  getToolsConfigPath,
   normalizeToolNameList,
   readDefaultToolsSetting,
+  readPermanentlyDisabledTools,
   standardDefaultBuiltinNames,
   writeDefaultToolsSetting,
+  writePermanentlyDisabledTools,
   buildLineDiff,
   commandPreview,
   parseApplyPatchMetadata,

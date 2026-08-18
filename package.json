@@ -1,7 +1,7 @@
 {
   "name": "pi-only-tools",
-  "version": "0.2.0",
-  "description": "A minimal Pi package providing shell_command and apply_patch, plus a TUI editor for Pi's global defaultTools setting.",
+  "version": "0.3.0",
+  "description": "Codex-style shell_command and apply_patch tools with unified session, permanent, and startup tool management.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
