@@ -820,8 +820,9 @@ function patchResultComponent(result, options, theme) {
     const diffLines = patchDiffDisplayLines(details.patchSummary, theme);
     if (options.expanded) lines.push(...diffLines);
     else lines.push(...collapsedLines(diffLines, CLAUDE_DIFF_MAX_LINES, theme));
-    if (details.combined && details.combined.trim() && details.combined.trim() !== "Done!") {
-      lines.push(theme.fg("muted", details.combined.trim()));
+    const combined = details.combined?.trim() ?? "";
+    if (combined && combined !== "Done!") {
+      lines.push(...splitOutputLines(combined).map((line) => theme.fg("muted", line)));
     }
     return lines;
   }, theme);
