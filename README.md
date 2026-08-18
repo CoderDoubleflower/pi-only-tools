@@ -29,30 +29,28 @@ export PI_ONLY_TOOLS_APPLY_PATCH_COMMAND=/absolute/path/to/apply_patch
 
 ## 安装
 
-Pi 的本地 package 来源应指向解压后的目录。
-
-### 从 ZIP 安装
+直接从 GitHub 全局安装：
 
 ```bash
-mkdir -p ~/.pi/packages
-unzip pi-only-tools-0.2.0-source.zip -d ~/.pi/packages
-pi install ~/.pi/packages/pi-only-tools
+pi install git:github.com/CoderDoubleflower/pi-only-tools
 ```
 
-### 从 npm tarball 安装
+也可以使用完整的 HTTPS 地址：
 
 ```bash
-mkdir -p ~/.pi/packages/pi-only-tools
-tar -xzf pi-only-tools-0.2.0.tgz \
-  --strip-components=1 \
-  -C ~/.pi/packages/pi-only-tools
-pi install ~/.pi/packages/pi-only-tools
+pi install https://github.com/CoderDoubleflower/pi-only-tools
 ```
 
-项目级安装 package：
+如需仅在当前项目中启用，进入项目目录后执行：
 
 ```bash
-pi install -l ~/.pi/packages/pi-only-tools
+pi install -l git:github.com/CoderDoubleflower/pi-only-tools
+```
+
+更新已安装的 package：
+
+```bash
+pi update --extensions
 ```
 
 安装或升级后，重启 Pi 或执行：
