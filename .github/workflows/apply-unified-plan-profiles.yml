@@ -50,6 +50,8 @@ jobs:
           from pathlib import Path
           path = Path("scripts/apply-unified-plan-profiles.mjs")
           text = path.read_text(encoding="utf-8").replace("\\\\`", "\\`")
+          text = text.replace("activeToolCalls !== 9", "activeToolCalls !== 10")
+          text = text.replace("Expected 9 Plan setActiveTools calls", "Expected 10 Plan setActiveTools calls")
           lines = []
           for line in text.splitlines():
               if "assert.match(promptResult.systemPrompt, /configured Plan tool allowlist is:" in line:
