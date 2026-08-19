@@ -43,14 +43,15 @@ jobs:
           cp /tmp/pi-claude-plan-mode/dist/tool-set.js src/plan/tool-set.js
           cp /tmp/pi-claude-plan-mode/dist/types.js src/plan/types.js
 
-      - name: Repair staged test literal
+      - name: Repair staged literals
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           path = Path("scripts/apply-unified-plan-profiles.mjs")
+          text = path.read_text(encoding="utf-8").replace("\\\\`", "\\`")
           lines = []
-          for line in path.read_text(encoding="utf-8").splitlines():
+          for line in text.splitlines():
               if "assert.match(promptResult.systemPrompt, /configured Plan tool allowlist is:" in line:
                   indent = line[: len(line) - len(line.lstrip())]
                   lines.extend([
