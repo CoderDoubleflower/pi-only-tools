@@ -6,9 +6,13 @@ import path from "node:path";
 import { Type } from "typebox";
 import { CONFIG_DIR_NAME, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";
 import { SettingsList, truncateToWidth } from "@earendil-works/pi-tui";
+import { createToolProfileController } from "./tool-profile-controller.js";
+import { registerClaudePlanMode } from "./plan/index.js";
 
 const ONLY_TOOLS = Object.freeze(["shell_command", "apply_patch"]);
 const PI_STANDARD_DEFAULT_TOOLS = Object.freeze(["read", "bash", "edit", "write"]);
+const PLAN_REQUIRED_TOOLS = Object.freeze(["plan_write", "ExitPlanMode"]);
+const PLAN_REQUIRED_TOOL_SET = new Set(PLAN_REQUIRED_TOOLS);
 const TOOLS_STATE_ENTRY = "tools-config";
 const TOOL_ITEM_PREFIX = "tool:";
 const ACTION_SAVE_CURRENT = "__save_current_builtins__";
@@ -933,7 +937,7 @@ async function readPermanentlyDisabledTools(configPath = getToolsConfigPath()) {
     if (!Array.isArray(config.permanentlyDisabledTools)) {
       throw new Error("permanentlyDisabledTools must be an array");
     }
-    return normalizeToolNameList(config.permanentlyDisabledTools);
+    return normalizeToolNameList(config.permanentlyDisabledTools).filter((name) => !PLAN_REQUIRED_TOOL_SET.has(name));
   } catch (error) {
     if (error && typeof error === "object" && error.code === "ENOENT") return [];
     const message = error instanceof Error ? error.message : String(error);
@@ -945,7 +949,9 @@ async function writePermanentlyDisabledTools(names, configPath = getToolsConfigP
   await mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
   const release = await acquireSettingsLock(configPath);
   try {
-    const permanentlyDisabledTools = normalizeToolNameList(names).sort((a, b) => a.localeCompare(b, "en"));
+    const permanentlyDisabledTools = normalizeToolNameList(names)
+      .filter((name) => !PLAN_REQUIRED_TOOL_SET.has(name))
+      .sort((a, b) => a.localeCompare(b, "en"));
     await writeFile(
       configPath,
       `${JSON.stringify({ version: 1, permanentlyDisabledTools }, null, 2)}\n`,
@@ -961,6 +967,7 @@ function getAllManagedTools(pi) {
   const byName = new Map();
   for (const tool of pi.getAllTools?.() ?? []) {
     if (!tool || typeof tool.name !== "string" || tool.name.trim() === "") continue;
+    if (PLAN_REQUIRED_TOOL_SET.has(tool.name)) continue;
     byName.set(tool.name, {
       name: tool.name,
       description: typeof tool.description === "string" ? tool.description : "",
@@ -1224,16 +1231,17 @@ export default function piOnlyTools(pi) {
     },
   });
 
+  const toolProfiles = createToolProfileController(pi, { protectedTools: PLAN_REQUIRED_TOOLS });
+
   let enabledTools = new Set();
   let permanentlyDisabledTools = new Set();
   let managedTools = [];
 
   const applyManagedTools = () => {
     const available = new Set(managedTools.map((tool) => tool.name));
-    const next = [...enabledTools].filter(
-      (name) => available.has(name) && !permanentlyDisabledTools.has(name),
-    );
-    return setActiveToolsIfChanged(pi, next);
+    const next = [...enabledTools].filter((name) => available.has(name));
+    toolProfiles.setPermanentDisabled(permanentlyDisabledTools, { apply: false });
+    return toolProfiles.setProfile("normal", next);
   };
 
   const persistSessionState = () => {
@@ -1250,6 +1258,8 @@ export default function piOnlyTools(pi) {
       ctx.ui.notify(`${copy.toolsReadError}: ${message}`, "error");
       permanentlyDisabledTools = new Set();
     }
+
+    toolProfiles.setPermanentDisabled(permanentlyDisabledTools, { apply: false });
 
     let savedTools;
     for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
@@ -1270,15 +1280,15 @@ export default function piOnlyTools(pi) {
     const copy = settingsCopy();
     try {
       permanentlyDisabledTools = new Set(await readPermanentlyDisabledTools());
-      const active = pi.getActiveTools?.() ?? [];
-      setActiveToolsIfChanged(pi, active.filter((name) => !permanentlyDisabledTools.has(name)));
+      toolProfiles.setPermanentDisabled(permanentlyDisabledTools, { apply: false });
+      toolProfiles.apply();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       ctx.ui.notify(`${copy.toolsReadError}: ${message}`, "error");
     }
   });
 
-  const openSettings = async (ctx) => {
+  const openSessionSettings = async (ctx) => {
     const copy = settingsCopy();
     if (ctx.mode !== "tui") {
       ctx.ui.notify(copy.requiresTui, "warning");
@@ -1521,13 +1531,64 @@ export default function piOnlyTools(pi) {
     if (dirty && !saveFailed) ctx.ui.notify(copy.saved, "info");
   };
 
+  const supportsPlanModeRuntime = [
+    "registerFlag",
+    "getFlag",
+    "sendMessage",
+    "sendUserMessage",
+    "appendEntry",
+    "setSessionName",
+    "getSessionName",
+    "setModel",
+    "getThinkingLevel",
+    "setThinkingLevel",
+  ].every((name) => typeof pi[name] === "function");
+
+  const planMode = supportsPlanModeRuntime
+    ? registerClaudePlanMode(pi, { toolProfiles })
+    : {
+        enabled: false,
+        async openConfig(ctx) {
+          ctx.ui.notify("Plan Mode configuration requires the complete Pi extension API.", "warning");
+          return { saved: false };
+        },
+        getStage: () => "unavailable",
+      };
+
+  if (supportsPlanModeRuntime) {
+    toolProfiles.setProfile("normal", pi.getActiveTools?.() ?? [], { apply: false });
+  }
+
+  const openSettings = async (args, ctx) => {
+    const requested = args.trim().toLowerCase();
+    if (["plan", "plan-mode", "profile:plan"].includes(requested)) {
+      await planMode.openConfig(ctx);
+      return;
+    }
+    if (["status", "profiles", "profile"].includes(requested)) {
+      if (requested === "status" || ctx.mode !== "tui") {
+        ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
+        return;
+      }
+      const labels = isChineseLocale()
+        ? { title: "工具 Profile", session: "会话工具", plan: "Plan 模式", status: "显示有效 Profile", close: "关闭" }
+        : { title: "Tool profiles", session: "Session tools", plan: "Plan Mode", status: "Show effective profiles", close: "Close" };
+      const choice = await ctx.ui.select(labels.title, [labels.session, labels.plan, labels.status, labels.close]);
+      if (choice === labels.session) await openSessionSettings(ctx);
+      else if (choice === labels.plan) await planMode.openConfig(ctx);
+      else if (choice === labels.status) ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
+      return;
+    }
+    await openSessionSettings(ctx);
+  };
+
   pi.registerCommand("only-tools", {
-    description: "Manage active tools, permanent disables, and built-in startup defaults",
-    handler: async (_args, ctx) => openSettings(ctx),
+    description: "Manage session tools and normal/Plan/execution tool profiles",
+    handler: async (args, ctx) => openSettings(args, ctx),
   });
   pi.registerCommand("pi-only-tools", {
     description: "Alias for /only-tools",
-    handler: async (_args, ctx) => openSettings(ctx),
+    handler: async (args, ctx) => openSettings(args, ctx),
   });
 
 }
@@ -1535,6 +1596,7 @@ export default function piOnlyTools(pi) {
 export const __test = {
   ONLY_TOOLS,
   PI_STANDARD_DEFAULT_TOOLS,
+  PLAN_REQUIRED_TOOLS,
   applyBuiltinSelection,
   getAllManagedTools,
   getBuiltinTools,

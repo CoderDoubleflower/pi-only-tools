@@ -1,13 +1,13 @@
 # pi-only-tools
 
-一个面向 Pi coding agent 的轻量 package，提供两个 Codex 风格基础工具：
+一个面向 Pi coding agent 的统一工具策略 package：既提供 Codex 风格基础工具，也统一管理 normal、Plan 和 execution 三个工具 Profile。
 
 - `shell_command`
 - `apply_patch`
 
 两个工具使用紧凑的终端渲染：调用行显示为 `Bash(...)` / `Update(...)`，结果使用 `⎿` 前缀，长输出默认折叠，文件修改显示增删行统计和带行号的 diff。
 
-从 **0.3.0** 开始，插件把原 `/tools` 扩展的全工具管理功能合并到 `/only-tools`。同一个 TUI 现在同时管理当前会话工具、永久禁用工具，以及 Pi 内置工具的启动默认值。
+从 **0.4.0** 开始，Claude 风格 Plan Mode 已合并进本插件，并与普通工具状态共享同一个 ToolProfileController。原 `/tools` 管理能力仍由 `/only-tools` 提供。同一个 TUI 现在同时管理当前会话工具、永久禁用工具，以及 Pi 内置工具的启动默认值。
 
 ## 要求
 
@@ -152,6 +152,82 @@ PI_CODING_AGENT_DIR=/custom/pi-agent-dir
 - `--exclude-tools` 在最终工具集上继续排除。
 
 因此，TUI 修改会立即作用于当前会话；下一次启动时仍按 Pi 官方的全局、项目和 CLI 优先级解析，随后再应用 `tools.json` 中的永久禁用规则。
+
+## 统一工具 Profile
+
+插件现在只有一个地方负责调用 Pi 的 `setActiveTools()`，并维护三个独立 Profile：
+
+- `normal`：普通会话工具，由 `/only-tools` 管理；
+- `plan`：Plan Mode 调查工具白名单，并固定加入 `plan_write` 与 `ExitPlanMode`；
+- `execution`：计划批准后的执行工具快照。
+
+永久禁用规则位于所有 Profile 之上。普通会话中禁用某个工具不会阻止 Plan Profile 临时启用它；标记为“永久禁用”则会从 Plan 和 execution 中同时移除。`plan_write` 与 `ExitPlanMode` 是受保护的 workflow 工具，不会进入永久禁用列表。
+
+查看有效 Profile：
+
+```text
+/only-tools status
+/only-tools profiles
+```
+
+### Plan Mode 配置
+
+Plan 配置已经成为 pi-only-tools 的一部分：
+
+```text
+/only-tools plan
+/plan config
+```
+
+两条命令打开同一个配置界面，可分别设置：
+
+- Plan Mode 允许使用的工具；
+- Plan 模型与思考强度；
+- Execute 模型与思考强度；
+- 全局配置或受信任项目配置。
+
+“Show effective configuration” 会同时展示 `requestedTools`、经过注册状态和永久禁用规则过滤后的 `effectiveTools`，以及每个不可用工具的原因。这样配置文件与模型最终实际收到的工具不会再悄悄分叉。
+
+默认 Plan 调查工具为：
+
+```text
+read
+grep
+find
+ls
+ask_user_question（若已安装）
+```
+
+配置文件继续兼容原插件：
+
+```text
+~/.pi/agent/claude-plan-mode.json
+<project>/.pi/claude-plan-mode.json
+```
+
+已安装独立 `pi-claude-plan-mode` 的用户无需迁移 JSON，但应卸载旧 package，避免重复注册 `EnterPlanMode`、`plan_write`、`ExitPlanMode` 和 `/plan`：
+
+```bash
+pi remove git:github.com/CoderDoubleflower/pi-claude-plan-mode
+pi update --extensions
+/reload
+```
+
+集成版本检测到旧插件已先注册 Plan 工具时会停止重复注册并显示 warning。
+
+### Plan workflow
+
+```text
+normal
+  └─ EnterPlanMode / /plan
+       └─ plan
+            └─ ExitPlanMode + /plan-approve
+                 └─ execution
+                      └─ /plan finish
+                           └─ normal
+```
+
+Plan 模式继续使用 canonical plan、五阶段内部规划提示、Context / Implementation Steps / Verification 内容契约、keep-context 执行和 fresh child-session handoff。
 
 ## `shell_command`
 
