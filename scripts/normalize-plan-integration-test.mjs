@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 const fixturePath = "test/plan-integration.test.mjs";
 const packagePath = "package.json";
 
-const fixture = await readFile(fixturePath, "utf8");
+let fixture = await readFile(fixturePath, "utf8");
 const start = fixture.indexOf("const validPlan = `# Implementation Plan");
 const endMarker = "`;\nawait tools.get(\"plan_write\")";
 const end = start >= 0 ? fixture.indexOf(endMarker, start) : -1;
@@ -24,12 +24,14 @@ Replace the printer bitmap rendering path while preserving behavior.
 - Confirm the end-to-end Plan handoff.
 `;
   const replacement = `const validPlan = ${JSON.stringify(plan)};\nawait tools.get(\"plan_write\")`;
-  await writeFile(
-    fixturePath,
-    fixture.slice(0, start) + replacement + fixture.slice(end + endMarker.length),
-    "utf8",
-  );
+  fixture = fixture.slice(0, start) + replacement + fixture.slice(end + endMarker.length);
 }
+
+fixture = fixture.replace(
+  "assert.ok(notifications.some((entry) => /web_search (permanently disabled)/.test(entry.message)));",
+  "assert.ok(notifications.some((entry) => entry.message.includes(\"web_search (permanently disabled)\")));",
+);
+await writeFile(fixturePath, fixture, "utf8");
 
 const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
 if (packageJson.scripts) delete packageJson.scripts.pretest;
