@@ -533,9 +533,6 @@ function shellResultComponent(result, options, theme) {
       }
     }
 
-    if (details.droppedChars > 0) {
-      groups.push([theme.fg("warning", `[Earlier output omitted: ${details.droppedChars} characters]`)]);
-    }
     const status = processStatusLine(details, theme);
     if (status) groups.push([status]);
     return groups;

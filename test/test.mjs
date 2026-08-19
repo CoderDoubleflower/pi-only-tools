@@ -291,6 +291,25 @@ assert.ok(shellCallLines.every((line) => !line.includes("⏺")));
 const shellRenderLines = shell.renderResult(shellResult, { expanded: false, isPartial: false }, theme, {}).render(100);
 assert.match(shellRenderLines[0], /^  ⎿  one/);
 assert.ok(shellRenderLines.some((line) => line.includes("… +2 lines (ctrl+o to expand)")));
+const truncatedRenderLines = shell.renderResult(
+  {
+    details: {
+      stdout: "retained output\n",
+      stderr: "",
+      droppedChars: 10_748,
+      exitCode: 0,
+      signal: null,
+      spawnError: null,
+      timedOut: false,
+      aborted: false,
+    },
+  },
+  { expanded: true, isPartial: false },
+  theme,
+  {},
+).render(100);
+assert.ok(truncatedRenderLines.some((line) => line.includes("retained output")));
+assert.ok(truncatedRenderLines.every((line) => !line.includes("Earlier output omitted")));
 
 const mixedResult = await shell.execute(
   "shell-2",
