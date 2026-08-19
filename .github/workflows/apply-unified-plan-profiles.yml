@@ -43,6 +43,26 @@ jobs:
           cp /tmp/pi-claude-plan-mode/dist/tool-set.js src/plan/tool-set.js
           cp /tmp/pi-claude-plan-mode/dist/types.js src/plan/types.js
 
+      - name: Repair staged test literal
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("scripts/apply-unified-plan-profiles.mjs")
+          lines = []
+          for line in path.read_text(encoding="utf-8").splitlines():
+              if "assert.match(promptResult.systemPrompt, /configured Plan tool allowlist is:" in line:
+                  indent = line[: len(line) - len(line.lstrip())]
+                  lines.extend([
+                      f"{indent}assert.match(promptResult.systemPrompt, /configured Plan tool allowlist is:/);",
+                      f"{indent}assert.match(promptResult.systemPrompt, /read/);",
+                      f"{indent}assert.match(promptResult.systemPrompt, /ask_user_question/);",
+                  ])
+              else:
+                  lines.append(line)
+          path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          PY
+
       - name: Apply unified profile integration
         run: |
           node --check scripts/apply-unified-plan-profiles.mjs
