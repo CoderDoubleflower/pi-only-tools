@@ -2,9 +2,9 @@ name: Apply unified Plan profiles
 
 on:
   workflow_dispatch:
-  push:
+  pull_request:
     branches:
-      - feat/unified-plan-profiles
+      - main
 
 permissions:
   contents: write
