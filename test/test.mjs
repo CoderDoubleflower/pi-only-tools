@@ -69,7 +69,7 @@ assert.equal(setActiveToolsCalls, 0, "loading the plugin must not force an activ
 assert.deepEqual(__test.ONLY_TOOLS, ["shell_command", "apply_patch"]);
 assert.ok(commands.has("only-tools"));
 assert.ok(commands.has("pi-only-tools"));
-assert.deepEqual([...handlers.keys()], ["session_start", "session_tree", "before_agent_start"]);
+assert.deepEqual([...handlers.keys()], ["tool_result", "session_start", "session_tree", "before_agent_start"]);
 assert.deepEqual(__test.getBuiltinTools(pi).map((tool) => tool.name), ["bash", "edit", "read", "write"]);
 assert.equal(__test.getGlobalSettingsPath(), path.join(agentDir, "settings.json"));
 assert.equal(__test.getProjectSettingsPath(temp), path.join(temp, ".pi", "settings.json"));
@@ -279,6 +279,12 @@ const shellResult = await shell.execute(
 assert.equal(shellResult.details.exitCode, 0);
 assert.match(shellResult.content[0].text, /one/);
 assert.ok(shellUpdates.length >= 1);
+const shellSuccessHookResult = await handlers.get("tool_result")[0]({
+  toolName: "shell_command",
+  details: shellResult.details,
+  isError: false,
+});
+assert.equal(shellSuccessHookResult, undefined);
 const shellCallLines = shell.renderCall({ command: "printf test" }, theme, { cwd: temp }).render(100);
 assert.match(shellCallLines[0], /^Bash\(/);
 assert.ok(shellCallLines.every((line) => !line.includes("⏺")));
@@ -297,6 +303,48 @@ const mixedRenderLines = shell.renderResult(mixedResult, { expanded: false, isPa
 assert.equal(mixedRenderLines.filter((line) => line.startsWith("  ⎿  ")).length, 2);
 assert.ok(mixedRenderLines.some((line) => line.includes("stdout-line")));
 assert.ok(mixedRenderLines.some((line) => line.includes("stderr-line")));
+
+const failedShellResult = await shell.execute(
+  "shell-3",
+  { command: "printf 'failed-output\\n'; exit 7", timeout_ms: 5_000 },
+  undefined,
+  undefined,
+  ctx,
+);
+assert.equal(failedShellResult.details.exitCode, 7);
+assert.match(failedShellResult.content[0].text, /failed-output/);
+assert.match(failedShellResult.content[0].text, /Command exited with code 7/);
+assert.deepEqual(
+  await handlers.get("tool_result")[0]({
+    toolName: "shell_command",
+    details: failedShellResult.details,
+    isError: false,
+  }),
+  { isError: true },
+);
+for (const details of [
+  { exitCode: null, timedOut: true },
+  { exitCode: null, aborted: true },
+  { exitCode: null, signal: "SIGTERM" },
+  { exitCode: null, spawnError: "spawn failed" },
+]) {
+  assert.deepEqual(
+    await handlers.get("tool_result")[0]({
+      toolName: "shell_command",
+      details,
+      isError: false,
+    }),
+    { isError: true },
+  );
+}
+assert.equal(
+  await handlers.get("tool_result")[0]({
+    toolName: "apply_patch",
+    details: { exitCode: 7 },
+    isError: false,
+  }),
+  undefined,
+);
 
 const patchScript = path.join(temp, "mock-apply-patch.mjs");
 await writeFile(

@@ -1119,6 +1119,13 @@ class ToolSettingsComponent {
 }
 
 export default function piOnlyTools(pi) {
+  pi.on("tool_result", (event) => {
+    if (event.toolName === "shell_command" && event.details && !isProcessSuccess(event.details)) {
+      return { isError: true };
+    }
+    return undefined;
+  });
+
   pi.registerTool({
     name: "shell_command",
     label: "Bash",
