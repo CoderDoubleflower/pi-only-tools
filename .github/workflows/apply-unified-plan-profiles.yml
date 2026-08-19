@@ -1,0 +1,72 @@
+name: Apply unified Plan profiles
+
+on:
+  push:
+    branches:
+      - feat/unified-plan-profiles
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/unified-plan-profiles
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Import tested Plan runtime modules
+        shell: bash
+        run: |
+          rm -rf /tmp/pi-claude-plan-mode
+          git clone https://github.com/CoderDoubleflower/pi-claude-plan-mode.git /tmp/pi-claude-plan-mode
+          git -C /tmp/pi-claude-plan-mode checkout cb520cddec0dc6cc46d4b25b31f12a9fe432cbbf
+          mkdir -p src/plan
+          cp /tmp/pi-claude-plan-mode/dist/config-ui.js src/plan/config-ui.js
+          cp /tmp/pi-claude-plan-mode/dist/config.js src/plan/config.js
+          cp /tmp/pi-claude-plan-mode/dist/constants.js src/plan/constants.js
+          cp /tmp/pi-claude-plan-mode/dist/handoff.js src/plan/handoff.js
+          cp /tmp/pi-claude-plan-mode/dist/index.js src/plan/index.js
+          cp /tmp/pi-claude-plan-mode/dist/plan-store.js src/plan/plan-store.js
+          cp /tmp/pi-claude-plan-mode/dist/profile.js src/plan/profile.js
+          cp /tmp/pi-claude-plan-mode/dist/prompts.js src/plan/prompts.js
+          cp /tmp/pi-claude-plan-mode/dist/state.js src/plan/state.js
+          cp /tmp/pi-claude-plan-mode/dist/tool-set.js src/plan/tool-set.js
+          cp /tmp/pi-claude-plan-mode/dist/types.js src/plan/types.js
+
+      - name: Apply unified profile integration
+        run: |
+          node --check scripts/apply-unified-plan-profiles.mjs
+          node scripts/apply-unified-plan-profiles.mjs
+
+      - name: Install development dependencies
+        run: npm install --no-package-lock
+
+      - name: Build, syntax-check, and test
+        run: |
+          npm run build
+          npm run check
+          npm test
+
+      - name: Commit tested implementation
+        shell: bash
+        run: |
+          rm -f scripts/apply-unified-plan-profiles.mjs
+          rm -f .github/workflows/apply-unified-plan-profiles.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "feat: unify normal, Plan, and execution tool profiles"
+          git push origin HEAD:feat/unified-plan-profiles
