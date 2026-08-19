@@ -115,6 +115,7 @@ Replace the printer bitmap rendering path while preserving behavior.
         shell: bash
         run: |
           rm -f scripts/apply-unified-plan-profiles.mjs
+          rm -f scripts/.unified-plan-profiles-trigger
           rm -f .github/workflows/apply-unified-plan-profiles.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
