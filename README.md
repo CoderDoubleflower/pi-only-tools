@@ -179,6 +179,17 @@ PI_CODING_AGENT_DIR=/custom/pi-agent-dir
 - stdout、stderr 分开渲染；stderr 和非零退出状态使用错误色。
 - 默认每个输出区块展示 3 行；只多 1 行时直接展示第 4 行，否则显示 `… +N lines (ctrl+o to expand)`。
 
+### 与 Codex 对齐的输出限制
+
+`shell_command` 使用与当前 Codex 原生 `shell_command` 相同的两层限制：
+
+1. 捕获层分别保留 stdout 和 stderr 的前 `1 MiB`；即使达到上限，仍继续读取到 EOF，避免子进程因管道背压卡住。
+2. stdout 与 stderr 聚合后再次限制为 `1 MiB`。两者竞争空间时，先为 stdout 保留三分之一、stderr 保留三分之二，再把 stderr 未使用的空间返还给 stdout。
+3. 返回模型前按 `10,000` 个近似 token 截断；估算规则与 Codex 一致，为约 `4 bytes/token`。
+4. 截断保留输出开头和结尾，并在中间插入 `…N tokens truncated…`，同时返回退出码、运行时间和原输出行数。
+
+因此，单次工具结果的模型正文通常约为 `40 KB`，不会再把接近 `400,000` 字符的内容直接写入上下文。最终 session `details` 只保存有界的 TUI 预览和字节统计，不再重复保存完整的 stdout、stderr 与 combined output；流式更新同样只发送小型预览。
+
 覆盖 Unix shell：
 
 ```bash
@@ -242,7 +253,7 @@ Update(src/index.ts)
      … +12 lines (ctrl+o to expand)
 ```
 
-Pi 的全局工具展开快捷键仍负责展开完整输出。
+Pi 的全局工具展开快捷键仍负责展开当前保留的 TUI 预览；超出 Codex 捕获与预览限制的内容不会写入 session。
 
 ## 参数兼容
 
@@ -274,4 +285,4 @@ Pi 的全局工具展开快捷键仍负责展开完整输出。
 - `shell_command` 可以执行任意命令。
 - `apply_patch` 是本机命令，不由本插件提供或沙箱化。
 - 工具启用设置只改变模型可见的工具集，不构成操作系统安全边界。
-- 安装前应审查 `src/index.js` 或 `dist/index.js`。
+- 安装前应审查 `src/entry.js`、`src/codex-shell-command.js`、`src/index.js` 或 `dist/index.js`。

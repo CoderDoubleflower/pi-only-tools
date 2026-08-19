@@ -13,8 +13,8 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node --check src/index.js && node --check dist/index.js",
-    "test": "node test/test.mjs && node test/render-lines.test.mjs",
+    "check": "node --check src/index.js && node --check src/entry.js && node --check src/codex-shell-command.js && node --check src/codex-shell-output.js && node --check src/codex-shell-process.js && node --check dist/index.js",
+    "test": "node test/test.mjs && node test/render-lines.test.mjs && node test/entry-registration.test.mjs && node test/codex-shell-command.test.mjs",
     "prepack": "npm run build && npm run check"
   },
   "peerDependencies": {
