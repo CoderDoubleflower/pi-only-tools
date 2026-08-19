@@ -1,6 +1,7 @@
 name: Apply unified Plan profiles
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - feat/unified-plan-profiles
