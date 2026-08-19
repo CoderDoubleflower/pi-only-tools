@@ -71,6 +71,37 @@ jobs:
           node --check scripts/apply-unified-plan-profiles.mjs
           node scripts/apply-unified-plan-profiles.mjs
 
+      - name: Normalize generated Plan fixture
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("test/plan-integration.test.mjs")
+          text = path.read_text(encoding="utf-8")
+          start = text.index("const validPlan = `# Implementation Plan")
+          end_marker = "`;\nawait tools.get(\"plan_write\")"
+          end = text.index(end_marker, start)
+          plan = """# Implementation Plan
+
+## Context
+Replace the printer bitmap rendering path while preserving behavior.
+
+## Implementation Steps
+1. `src/index.js`
+   - Reuse the existing profile controller and update the concrete integration path.
+
+## Verification
+- `npm test`
+- Confirm the end-to-end Plan handoff.
+"""
+          replacement = "const validPlan = " + json.dumps(plan, ensure_ascii=False) + ";\nawait tools.get(\"plan_write\")"
+          text = text[:start] + replacement + text[end + len(end_marker):]
+          path.write_text(text, encoding="utf-8")
+          PY
+          node --check test/plan-integration.test.mjs
+
       - name: Install development dependencies
         run: npm install --no-package-lock
 
