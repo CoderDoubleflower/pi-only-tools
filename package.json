@@ -1,6 +1,6 @@
 {
   "name": "pi-only-tools",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Codex-style shell and patch tools with unified normal, Plan, and execution tool profiles.",
   "type": "module",
   "main": "dist/index.js",

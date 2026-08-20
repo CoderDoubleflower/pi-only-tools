@@ -165,6 +165,25 @@ await commands.get("only-tools").handler("", {
 });
 assert.ok(notifications.some((entry) => entry.type === "warning" && /TUI/.test(entry.message)));
 
+// Bare /only-tools opens the top-level profile menu so Plan configuration is discoverable.
+let topLevelMenu;
+await commands.get("only-tools").handler("", {
+  mode: "tui",
+  cwd: temp,
+  sessionManager,
+  ui: {
+    notify(message, type) {
+      notifications.push({ message, type });
+    },
+    async select(title, options) {
+      topLevelMenu = { title, options: [...options] };
+      return "Close";
+    },
+  },
+});
+assert.equal(topLevelMenu.title, "Tool profiles");
+assert.deepEqual(topLevelMenu.options, ["Session tools", "Plan Mode", "Show effective profiles", "Close"]);
+
 const theme = {
   fg(_color, text) {
     return String(text);
@@ -176,7 +195,7 @@ const theme = {
 
 async function openToolSettings(interact) {
   let rendered = [];
-  await commands.get("only-tools").handler("", {
+  await commands.get("only-tools").handler("session", {
     mode: "tui",
     cwd: temp,
     sessionManager,
