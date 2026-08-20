@@ -41,7 +41,7 @@ const component = new __test.ProfileMatrixComponent({
   tools,
   phaseProfiles,
   copyText: {
-    title: "Tool profile matrix",
+    title: "Only Tools",
     subtitle: "Normal / Plan are columns; Model, Effort, and tools are rows.",
     model: "Model",
     effort: "Effort",
@@ -58,13 +58,14 @@ const component = new __test.ProfileMatrixComponent({
 });
 
 const rendered = component.render(120);
-const header = rendered.find((line) => line.includes("Normal") && line.includes("Plan"));
+const header = rendered.find((line) => line.includes("NORMAL") && line.includes("PLAN"));
 assert.ok(header, "Normal and Plan must be column headers on the same line");
-assert.ok(rendered.some((line) => line.trimStart().startsWith("> Model")));
+assert.ok(rendered.some((line) => line.trimStart().startsWith("› Model")));
 assert.ok(rendered.some((line) => line.includes("Effort") && line.includes("high") && line.includes("xhigh")));
 const readRow = rendered.find((line) => line.includes("read"));
-assert.ok(readRow?.includes("[✓]"));
-assert.ok(readRow?.includes("[×]"));
+assert.ok(readRow?.includes("●"));
+assert.ok(readRow?.includes("○"));
+assert.equal(readRow?.includes("["), false, "tool toggles should not use small bracket markers");
 
 // Left/right selects the profile column; up/down selects Model/Effort/tool rows.
 component.handleInput("\u001b[C"); // Plan
@@ -84,7 +85,7 @@ const modelComponent = new __test.ProfileMatrixComponent({
   tools,
   phaseProfiles,
   copyText: {
-    title: "Tool profile matrix",
+    title: "Only Tools",
     subtitle: "",
     model: "Model",
     effort: "Effort",

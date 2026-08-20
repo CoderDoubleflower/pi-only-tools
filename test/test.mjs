@@ -170,13 +170,13 @@ await commands.get("only-tools").handler("", {
     },
   },
 });
-assert.ok(matrixLines.some((line) => line.includes("Tool profile matrix")));
-assert.ok(matrixLines.some((line) => line.includes("Normal")));
-assert.ok(matrixLines.some((line) => line.includes("Plan")));
+assert.ok(matrixLines.some((line) => line.includes("Only Tools")));
+assert.ok(matrixLines.some((line) => line.includes("NORMAL")));
+assert.ok(matrixLines.some((line) => line.includes("PLAN")));
 assert.equal(matrixLines.some((line) => line.includes("Execution")), false);
 assert.ok(matrixLines.some((line) => line.includes("Model")));
 assert.ok(matrixLines.some((line) => line.includes("Effort")));
-assert.ok(matrixLines.some((line) => line.includes("Normal") && line.includes("Plan")));
+assert.ok(matrixLines.some((line) => line.includes("NORMAL") && line.includes("PLAN")));
 
 // Tool execution and Claude-style rendering remain intact.
 const ctx = { cwd: temp };

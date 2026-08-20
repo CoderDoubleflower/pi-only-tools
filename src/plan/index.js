@@ -1,4 +1,5 @@
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { ASK_USER_QUESTION_TOOL, ENTER_PLAN_MODE_TOOL, EXIT_PLAN_MODE_TOOL, PLAN_CONTINUE_MESSAGE, PLAN_HANDOFF_MESSAGE, PLAN_STATE_ENTRY, PLAN_STATUS_KEY, PLAN_WIDGET_KEY, PLAN_WRITE_TOOL, STATE_SCHEMA_VERSION, } from "./constants.js";
 import { loadPlanModeConfig } from "./config.js";
@@ -85,6 +86,7 @@ export function registerClaudePlanMode(pi, options = {}) {
     const toolProfiles = options.toolProfiles;
     let state;
     let pendingPlanningContinuation = false;
+    let removeShiftTabListener;
     function allToolNames() {
         return new Set(pi.getAllTools().map((tool) => tool.name));
     }
@@ -388,6 +390,33 @@ export function registerClaudePlanMode(pi, options = {}) {
         applyActiveTools(buildIdleTools(next.executionTools ?? next.baseline.tools, allToolNames()));
         await applyProfile(pi, ctx, next.executionProfile ?? next.baseline.profile, next.baseline.profile, "Normal profile");
         updateUi(ctx);
+    }
+    async function togglePlanModeFromShortcut(ctx) {
+        if (typeof ctx.isIdle === "function" && !ctx.isIdle()) {
+            ctx.ui.notify("Shift+Tab can toggle Plan Mode after the current agent turn finishes.", "warning");
+            return;
+        }
+        if (state?.stage === "planning" || state?.stage === "ready") {
+            await leaveCurrentPlan(ctx);
+            ctx.ui.notify("Plan Mode off · Normal profile", "info");
+            return;
+        }
+        const result = await beginPlanning(ctx, { confirm: false });
+        ctx.ui.notify(result.entered ? "Plan Mode on · Shift+Tab to return to Normal" : result.message, result.entered ? "info" : "warning");
+    }
+    function installShiftTabToggle(ctx) {
+        removeShiftTabListener?.();
+        removeShiftTabListener = undefined;
+        if (ctx.mode !== "tui" || typeof ctx.ui.onTerminalInput !== "function")
+            return;
+        removeShiftTabListener = ctx.ui.onTerminalInput((data) => {
+            if (!matchesKey(data, Key.shift("tab")))
+                return;
+            void togglePlanModeFromShortcut(ctx).catch((error) => {
+                ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+            });
+            return { consume: true };
+        });
     }
     async function editCanonicalPlan(ctx, options = {}) {
         if (!state?.plan || (state.stage !== "planning" && state.stage !== "ready")) {
@@ -806,6 +835,7 @@ export function registerClaudePlanMode(pi, options = {}) {
     });
     pi.on("session_start", async (event, ctx) => {
         await restoreBranchRuntime(ctx, undefined, event.reason !== "new");
+        installShiftTabToggle(ctx);
         if (pi.getFlag("plan") === true && (!state || state.stage === "idle" || state.stage === "handed_off")) {
             const result = await beginPlanning(ctx, { reason: "Started with --plan", confirm: false });
             if (!result.entered)
@@ -813,6 +843,8 @@ export function registerClaudePlanMode(pi, options = {}) {
         }
     });
     pi.on("session_shutdown", (_event, ctx) => {
+        removeShiftTabListener?.();
+        removeShiftTabListener = undefined;
         pendingPlanningContinuation = false;
         ctx.ui.setStatus(PLAN_STATUS_KEY, undefined);
         ctx.ui.setWidget(PLAN_WIDGET_KEY, undefined);
