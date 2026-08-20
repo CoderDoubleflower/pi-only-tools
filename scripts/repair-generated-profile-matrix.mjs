@@ -27,6 +27,20 @@ await rewrite("test/test.mjs", (text) => text
     "",
   ));
 
+await rewrite("test/plan-integration.test.mjs", (text) => text
+  .replace(
+    `const profiles = createToolProfileController(pi, { protectedTools: ["plan_write", "ExitPlanMode"] });\nprofiles.setPermanentDisabled(["web_search"], { apply: false });\nconst plan = registerClaudePlanMode(pi, { toolProfiles: profiles });\nassert.equal(plan.enabled, true);`,
+    `const profiles = createToolProfileController(pi, { protectedTools: ["plan_write", "ExitPlanMode"] });\nconst plan = registerClaudePlanMode(pi, { toolProfiles: profiles });\n// The integrated extension loads the persistent profile matrix before the Plan\n// session_start hook runs. Mirror that lifecycle here instead of the removed\n// session/permanent denylist model.\nprofiles.setPermanentDisabled([], { apply: false });\nprofiles.setProfile("normal", ["shell_command", "apply_patch", "EnterPlanMode"], { apply: false });\nprofiles.setProfile(\n  "plan",\n  ["read", "ask_user_question", "plan_write", "ExitPlanMode"],\n  { apply: false },\n);\nprofiles.setProfile("execution", ["shell_command", "apply_patch"], { apply: false });\nprofiles.activate("normal");\nassert.equal(plan.enabled, true);`,
+  )
+  .replace(
+    'assert.ok(notifications.some((entry) => entry.message.includes("web_search (permanently disabled)")));\n',
+    "",
+  )
+  .replace(
+    'profiles.setPermanentDisabled(["web_search", "read"]);\n',
+    'profiles.setProfile("plan", ["ask_user_question", "plan_write", "ExitPlanMode"]);\n',
+  ));
+
 await rewrite("README.md", (text) => text.replace(
   "## `shell_command`\n## `shell_command`\n",
   "## `shell_command`\n",
