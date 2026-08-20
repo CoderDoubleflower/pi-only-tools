@@ -23,6 +23,8 @@ jobs:
         run: |
           node --check scripts/apply-shift-tab-compact-ui.mjs
           node scripts/apply-shift-tab-compact-ui.mjs
+          node --check scripts/fix-shift-tab-tests.mjs
+          node scripts/fix-shift-tab-tests.mjs
       - run: npm install --no-package-lock
       - run: npm run build
       - run: npm run check
@@ -32,6 +34,7 @@ jobs:
         shell: bash
         run: |
           rm -f scripts/apply-shift-tab-compact-ui.mjs
+          rm -f scripts/fix-shift-tab-tests.mjs
           rm -f .github/workflows/validate-shift-tab-compact-ui.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
