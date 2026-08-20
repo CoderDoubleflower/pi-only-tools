@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feat/profile-tool-matrix
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -25,8 +28,10 @@ jobs:
 
       - name: Apply profile matrix changes
         run: |
-          node --check scripts/apply-profile-matrix.mjs
-          node scripts/apply-profile-matrix.mjs
+          if [ -f scripts/apply-profile-matrix.mjs ]; then
+            node --check scripts/apply-profile-matrix.mjs
+            node scripts/apply-profile-matrix.mjs
+          fi
 
       - name: Install dependencies
         run: npm install --no-package-lock
@@ -39,9 +44,11 @@ jobs:
           git diff --check
 
       - name: Commit tested implementation
+        if: ${{ hashFiles('scripts/apply-profile-matrix.mjs') != '' }}
         shell: bash
         run: |
           rm -f scripts/apply-profile-matrix.mjs
+          rm -f scripts/.profile-matrix-trigger
           rm -f .github/workflows/profile-tool-matrix.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
