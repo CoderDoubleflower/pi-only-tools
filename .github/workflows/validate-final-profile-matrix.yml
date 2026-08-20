@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feat/profile-tool-matrix
+  pull_request:
+    branches:
+      - main
 
 jobs:
   test:
