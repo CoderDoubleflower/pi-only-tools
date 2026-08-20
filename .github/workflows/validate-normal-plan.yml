@@ -24,6 +24,8 @@ jobs:
           if [ -f scripts/remove-execution-profile.mjs ]; then
             node --check scripts/remove-execution-profile.mjs
             node scripts/remove-execution-profile.mjs
+            node --check scripts/fix-normal-plan-profile.mjs
+            node scripts/fix-normal-plan-profile.mjs
           fi
       - run: npm install --no-package-lock
       - run: npm run build
@@ -35,6 +37,7 @@ jobs:
         shell: bash
         run: |
           rm -f scripts/remove-execution-profile.mjs
+          rm -f scripts/fix-normal-plan-profile.mjs
           rm -f .github/workflows/remove-execution-profile.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
