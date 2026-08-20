@@ -31,6 +31,7 @@ jobs:
           if [ -f scripts/apply-profile-matrix.mjs ]; then
             node --check scripts/apply-profile-matrix.mjs
             node scripts/apply-profile-matrix.mjs
+            node scripts/repair-generated-profile-matrix.mjs
           fi
 
       - name: Install dependencies
@@ -48,6 +49,7 @@ jobs:
         shell: bash
         run: |
           rm -f scripts/apply-profile-matrix.mjs
+          rm -f scripts/repair-generated-profile-matrix.mjs
           rm -f scripts/.profile-matrix-trigger
           rm -f .github/workflows/profile-tool-matrix.yml
           git config user.name "github-actions[bot]"
