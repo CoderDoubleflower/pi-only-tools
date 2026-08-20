@@ -26,8 +26,8 @@ function isChineseLocale() {
 function copy() {
   return isChineseLocale()
     ? {
-        title: "工具 Profile 矩阵",
-        subtitle: "Normal / Plan 是列；Model、Effort 和工具是行。所有修改都会持久保存。",
+        title: "Only Tools",
+        subtitle: "",
         model: "Model",
         effort: "Effort",
         modelCurrent: "Pi 当前",
@@ -38,13 +38,13 @@ function copy() {
         unregistered: "当前未注册",
         editModel: "Enter：选择模型",
         editEffort: "Enter：选择 effort",
-        help: "↑↓ 行  ←→ Profile  Enter 编辑/切换  Space 切换工具  M 模型  E/T Effort  A 全选  N 清空  R 重置  Esc 保存",
+        help: "↑↓ 行  ←→ Profile  Enter/Space 切换  M 模型  E/T Effort  A/N/R  Esc 保存",
         saved: "Profile 工具矩阵已保存",
         requiresTui: "Profile 工具矩阵仅在 Pi TUI 模式中可用。",
       }
     : {
-        title: "Tool profile matrix",
-        subtitle: "Normal / Plan are columns; Model, Effort, and tools are rows. Every change is persistent.",
+        title: "Only Tools",
+        subtitle: "",
         model: "Model",
         effort: "Effort",
         modelCurrent: "Pi current",
@@ -55,7 +55,7 @@ function copy() {
         unregistered: "not registered now",
         editModel: "Enter: choose model",
         editEffort: "Enter: choose effort",
-        help: "↑↓ row  ←→ profile  Enter edit/toggle  Space toggle tool  M model  E/T effort  A all  N none  R reset  Esc save",
+        help: "↑↓ row  ←→ profile  Enter/Space toggle  M model  E/T effort  A/N/R  Esc save",
         saved: "Tool profile matrix saved",
         requiresTui: "The tool profile matrix is available only in Pi TUI mode.",
       };
@@ -240,8 +240,7 @@ class ProfileMatrixComponent {
   toolCell(profile, tool) {
     const lock = lockedCell(profile, tool.name);
     const enabled = this.cellValue(profile, tool.name);
-    let value = enabled ? "[✓]" : "[×]";
-    if (lock.locked) value += "*";
+    let value = lock.locked ? (enabled ? "◆" : "◇") : enabled ? "●" : "○";
     if (!tool.registered) value += "?";
     return value;
   }
@@ -321,23 +320,22 @@ class ProfileMatrixComponent {
     const w = Math.max(40, Math.floor(width));
     const longestTool = this.tools.reduce((max, tool) => Math.max(max, tool.name.length), 0);
     const maxLabelForWidth = Math.max(10, Math.floor(w * 0.4));
-    const labelWidth = Math.min(34, maxLabelForWidth, Math.max(12, longestTool + 4));
+    const labelWidth = Math.min(30, maxLabelForWidth, Math.max(12, longestTool + 4));
     const gap = 2;
-    const profileWidth = Math.max(8, Math.floor((w - labelWidth - gap * 2) / PROFILE_NAMES.length));
+    const availableProfileWidth = Math.max(8, Math.floor((w - labelWidth - gap * 2) / PROFILE_NAMES.length));
+    const profileWidth = Math.min(28, availableProfileWidth);
     const pad = (value, size) => truncateToWidth(String(value), Math.max(1, size - 1), "…").padEnd(size);
-    const selectedCell = (value, rowIndex, colIndex) => `${rowIndex === this.row && colIndex === this.col ? "› " : "  "}${value}`;
-    const rowLabel = (label, rowIndex) => `${rowIndex === this.row ? ">" : " "} ${label}`;
+    const selectedCell = (value, rowIndex, colIndex) => rowIndex === this.row && colIndex === this.col ? this.theme.bold(value) : value;
+    const rowLabel = (label, rowIndex) => `${rowIndex === this.row ? "›" : " "} ${label}`;
 
     const header = [pad("", labelWidth)];
     PROFILE_NAMES.forEach((profile, colIndex) => {
-      const name = PROFILE_LABELS[profile];
-      header.push(pad(colIndex === this.col ? `[${name}]` : name, profileWidth));
+      const name = PROFILE_LABELS[profile].toUpperCase();
+      header.push(pad(colIndex === this.col ? `› ${name}` : `  ${name}`, profileWidth));
     });
 
     const lines = [
       this.theme.bold(this.copy.title),
-      this.theme.fg("dim", this.copy.subtitle),
-      "",
       this.theme.fg("muted", header.join(" ".repeat(gap))),
     ];
 
@@ -373,21 +371,15 @@ class ProfileMatrixComponent {
     });
 
     const profile = this.currentProfile();
-    const kind = this.currentKind();
-    let detail = `${this.copy.selected}: ${PROFILE_LABELS[profile]}`;
-    if (kind === "model") detail += ` × ${this.copy.model} · ${this.copy.editModel}`;
-    else if (kind === "effort") detail += ` × ${this.copy.effort} · ${this.copy.editEffort}`;
-    else {
-      const tool = this.currentTool();
-      if (tool) {
-        const lock = lockedCell(profile, tool.name);
-        detail += ` × ${tool.name}`;
-        if (!tool.registered) detail += ` · ${this.copy.unregistered}`;
-        if (lock.locked) detail += ` · ${lock.reason === "required" ? this.copy.lockedRequired : this.copy.lockedControl}`;
-      }
+    const tool = this.currentTool();
+    if (tool) {
+      const lock = lockedCell(profile, tool.name);
+      const notes = [];
+      if (!tool.registered) notes.push(this.copy.unregistered);
+      if (lock.locked) notes.push(lock.reason === "required" ? this.copy.lockedRequired : this.copy.lockedControl);
+      if (notes.length > 0) lines.push("", this.theme.fg("muted", `${tool.name} · ${notes.join(" · ")}`));
     }
-    lines.push("", this.theme.fg("muted", detail));
-    lines.push(this.theme.fg("muted", this.copy.help));
+    lines.push("", this.theme.fg("muted", this.copy.help));
     if (start > 0 || end < this.tools.length) {
       lines.push(this.theme.fg("dim", `tools ${start + 1}-${end}/${this.tools.length}`));
     }

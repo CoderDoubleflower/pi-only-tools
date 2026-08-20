@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2
+
+- Use Shift+Tab as the global Normal/Plan toggle in TUI mode.
+- Consume Shift+Tab before Pi's built-in thinking-cycle binding; Effort remains configurable from `/only-tools`.
+- Simplify `/only-tools` spacing and footer text, and replace `[✓]` / `[×]` with larger `●` / `○` state glyphs.
+- Use `◆` / `◇` for locked Plan-control cells and keep `?` for currently unavailable tools.
+
 ## 0.5.1
 
 - Transpose `/only-tools` so Normal/Plan are columns and Model/Effort/tools are rows.

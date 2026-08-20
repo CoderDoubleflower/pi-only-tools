@@ -73,9 +73,9 @@ pi update --extensions
                     Normal                  Plan
 Model               provider/model          provider/model
 Effort              high                    xhigh
-read                [✓]                     [✓]
-bash                [✓]                     [×]
-grep                [×]                     [✓]
+read                ●                       ●
+bash                ●                       ○
+grep                ○                       ●
 ...                 ...                     ...
 ```
 
@@ -98,7 +98,17 @@ grep                [×]                     [✓]
 - `R`：恢复当前 Profile 的默认值；
 - `Esc / S`：保存并关闭。
 
-Normal 与 Plan 的模型/effort 都在同一界面编辑；选择 inherit 时继承 Pi 当前/default。工具单元格使用 `[✓]` / `[×]` 表示允许/不允许，`*` 表示该控制工具在当前 Profile 中被锁定，`?` 表示工具当前未注册。工具较多时列表会纵向滚动。
+Normal 与 Plan 的模型/effort 都在同一界面编辑；选择 inherit 时继承 Pi 当前/default。工具单元格使用更醒目的 `●` / `○` 表示允许/不允许；锁定的控制工具使用 `◆` / `◇`，`?` 表示工具当前未注册。工具较多时列表会纵向滚动。
+
+### Plan Mode 快捷键
+
+在 Pi TUI 主界面按 `Shift+Tab`：
+
+- Normal → Plan：直接进入 Plan Mode；
+- Plan / Ready → Normal：退出 Plan Mode 并恢复 Normal；
+- Agent 正在运行时不会中途切换，会提示等待当前 turn 结束。
+
+Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后会优先消费这个按键作为 Plan toggle；thinking/effort 可以直接在 `/only-tools` 的 Effort 行配置，或者把 Pi 的 `app.thinking.cycle` 重新绑定到其他按键。
 
 ### Profile 语义
 

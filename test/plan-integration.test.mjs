@@ -17,6 +17,7 @@ const tools = new Map();
 const entries = [];
 const notifications = [];
 const sentMessages = [];
+const terminalInputHandlers = new Set();
 const registered = new Set([
   "shell_command",
   "apply_patch",
@@ -71,6 +72,10 @@ const ctx = {
     setWidget() {},
     getEditorText: () => "",
     setEditorText() {},
+    onTerminalInput(handler) {
+      terminalInputHandlers.add(handler);
+      return () => terminalInputHandlers.delete(handler);
+    },
   },
 };
 
@@ -134,6 +139,16 @@ async function emit(event, payload = {}) {
 }
 
 await emit("session_start", { reason: "startup" });
+assert.equal(terminalInputHandlers.size, 1, "Plan Mode must install one Shift+Tab terminal listener");
+const terminalInputHandler = [...terminalInputHandlers][0];
+assert.equal(terminalInputHandler("x"), undefined);
+assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
+for (let i = 0; i < 50 && profiles.mode !== "plan"; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+assert.equal(profiles.mode, "plan", "Shift+Tab must enter Plan Mode");
+assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
+for (let i = 0; i < 50 && profiles.mode !== "normal"; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+assert.equal(profiles.mode, "normal", "Shift+Tab must exit Plan Mode back to Normal");
+
 await commands.get("plan").handler("on Inspect the repository", ctx);
 assert.equal(profiles.mode, "plan");
 assert.deepEqual(activeTools, ["read", "plan_write", "ExitPlanMode", "ask_user_question"]);
@@ -170,5 +185,7 @@ await commands.get("plan").handler("finish", ctx);
 assert.equal(profiles.mode, "normal");
 assert.ok(activeTools.includes("shell_command"));
 
+await emit("session_shutdown");
+assert.equal(terminalInputHandlers.size, 0, "Shift+Tab listener must be removed on session shutdown");
 await rm(root, { recursive: true, force: true });
 console.log("integrated Plan profile tests passed");
