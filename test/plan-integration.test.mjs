@@ -110,12 +110,11 @@ await writeFile(
   }),
 );
 
-const profiles = createToolProfileController(pi, { protectedTools: ["plan_write", "ExitPlanMode"] });
+const profiles = createToolProfileController(pi);
 const plan = registerClaudePlanMode(pi, { toolProfiles: profiles });
 // The integrated extension loads the persistent profile matrix before the Plan
 // session_start hook runs. Mirror that lifecycle here instead of the removed
 // session/permanent denylist model.
-profiles.setPermanentDisabled([], { apply: false });
 profiles.setProfile("normal", ["shell_command", "apply_patch", "EnterPlanMode"], { apply: false });
 profiles.setProfile(
   "plan",

@@ -390,7 +390,6 @@ export async function openProfileMatrix(pi, ctx, options) {
   });
 
   if (options.toolProfiles) {
-    options.toolProfiles.setPermanentDisabled([], { apply: false });
     for (const profile of PROFILE_NAMES) {
       options.toolProfiles.setProfile(profile, runtimeToolsForProfile(profile, savedConfig.profiles[profile]), { apply: false });
     }

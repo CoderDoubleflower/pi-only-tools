@@ -72,9 +72,7 @@ assert.ok(commands.has("pi-only-tools"));
 assert.deepEqual([...handlers.keys()], ["tool_result", "session_start", "session_tree", "before_agent_start"]);
 assert.deepEqual(__test.getBuiltinTools(pi).map((tool) => tool.name), ["bash", "edit", "read", "write"]);
 assert.equal(__test.getGlobalSettingsPath(), path.join(agentDir, "settings.json"));
-assert.equal(__test.getProjectSettingsPath(temp), path.join(temp, ".pi", "settings.json"));
 assert.deepEqual(__test.normalizeToolNameList([" read ", "bash", "read", "", null]), ["read", "bash"]);
-assert.deepEqual(__test.standardDefaultBuiltinNames(__test.getBuiltinTools(pi)), ["read", "bash", "edit", "write"]);
 assert.deepEqual(__test.prepareShellArguments({ cmd: "pwd", cwd: ".", timeout: 2 }), {
   command: "pwd",
   workdir: ".",
@@ -98,22 +96,23 @@ let settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
 assert.deepEqual(settings.defaultTools, ["bash", "read"]);
 assert.equal(settings.theme, "dark");
 assert.deepEqual(settings.retry, { enabled: true });
-assert.deepEqual((await __test.readDefaultToolsSetting()).defaultTools, ["bash", "read"]);
 
 const toolsConfigPath = __test.getToolsConfigPath();
-assert.deepEqual(await __test.writePermanentlyDisabledTools(["custom_extra", "custom_extra"]), ["custom_extra"]);
-assert.deepEqual(await __test.readPermanentlyDisabledTools(), ["custom_extra"]);
-let toolsConfig = JSON.parse(await readFile(toolsConfigPath, "utf8"));
-assert.deepEqual(toolsConfig, { version: 1, permanentlyDisabledTools: ["custom_extra"] });
+await mkdir(path.dirname(toolsConfigPath), { recursive: true });
+await writeFile(
+  toolsConfigPath,
+  `{
+  "version": 1,
+  "permanentlyDisabledTools": [
+    "custom_extra"
+  ]
+}\n`,
+);
 
 await __test.writeDefaultToolsSetting(undefined);
 settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
 assert.equal(Object.hasOwn(settings, "defaultTools"), false);
 assert.equal(settings.defaultModel, "example");
-
-const malformedSettingsPath = path.join(temp, "bad-settings.json");
-await writeFile(malformedSettingsPath, JSON.stringify({ defaultTools: "bash" }));
-await assert.rejects(__test.readDefaultToolsSetting(malformedSettingsPath), /defaultTools must be an array/);
 
 // Unified profile matrix: legacy permanent/session state migrates once, then
 // all tool choices are persistent per-profile allowlists.
