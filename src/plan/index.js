@@ -563,17 +563,6 @@ export function registerClaudePlanMode(pi, options = {}) {
             return;
         }
     }
-    const existingPlanTools = new Set(pi.getAllTools().map((tool) => tool.name));
-    const duplicateTools = [ENTER_PLAN_MODE_TOOL, PLAN_WRITE_TOOL, EXIT_PLAN_MODE_TOOL].filter((name) => existingPlanTools.has(name));
-    if (duplicateTools.length > 0) {
-        pi.on("session_start", (_event, ctx) => {
-            ctx.ui.notify(
-                `Plan Mode is already registered by another extension (${duplicateTools.join(", ")}). Remove the standalone pi-claude-plan-mode package to use the integrated tool profiles.`,
-                "warning",
-            );
-        });
-        return { enabled: false, openConfig: openConfiguration, getState: () => state, getStage: () => state?.stage ?? "idle" };
-    }
     pi.registerFlag("plan", {
         description: "Start the session in Claude-style Plan Mode",
         type: "boolean",
