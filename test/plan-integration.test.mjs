@@ -161,7 +161,7 @@ assert.equal(profiles.mode, "plan");
 
 await commands.get("plan-approve").handler("keep", ctx);
 assert.equal(profiles.mode, "normal");
-assert.ok(activeTools.includes("shell_command"));
+assert.deepEqual(activeTools, ["shell_command"]);
 assert.equal(ctx.model.provider, "normal");
 assert.equal(thinkingLevel, "xhigh");
 assert.ok(sentMessages.some((entry) => entry.message?.customType));

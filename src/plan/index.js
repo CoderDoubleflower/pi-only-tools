@@ -106,7 +106,12 @@ export function registerClaudePlanMode(pi, options = {}) {
             pi.setActiveTools(toolNames);
             return toolNames;
         }
-        return toolProfiles.activate(profileForStage(), toolNames);
+        const profile = profileForStage();
+        // Normal is the persistent source of truth. The internal executing state
+        // tracks an approved plan, but it must never overwrite the Normal allowlist.
+        return profile === "normal"
+            ? toolProfiles.activate("normal")
+            : toolProfiles.activate("plan", toolNames);
     }
     function unavailablePlanningTools(toolNames) {
         if (toolProfiles)

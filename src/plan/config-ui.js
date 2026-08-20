@@ -5,7 +5,7 @@ function cloneConfig(config) {
     return {
         ...(config.tools !== undefined ? { tools: [...config.tools] } : {}),
         planning: { ...config.planning },
-        execution: { ...config.normal },
+        normal: { ...config.normal },
     };
 }
 function modelKey(model) {
@@ -201,7 +201,7 @@ function effectiveConfigText(config, allToolNames, globalPath, projectPath, tool
             effectiveTools,
             unavailableTools,
             planning: config.planning,
-            execution: config.normal,
+            normal: config.normal,
         }, null, 2),
     ].join("\n");
 }
