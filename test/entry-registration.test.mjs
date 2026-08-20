@@ -85,8 +85,11 @@ const loadingActions = [
   "getThinkingLevel",
   "setThinkingLevel",
 ];
+const loadOnlyTools = new Map();
 const loadOnlyApi = {
-  registerTool() {},
+  registerTool(tool) {
+    loadOnlyTools.set(tool.name, tool);
+  },
   registerCommand() {},
   registerFlag() {},
   on() {},
@@ -97,5 +100,9 @@ for (const name of loadingActions) {
   };
 }
 assert.doesNotThrow(() => plugin(loadOnlyApi));
+for (const toolName of ["EnterPlanMode", "plan_write", "ExitPlanMode"]) {
+  assert.equal(loadOnlyTools.get(toolName).renderShell, "self", `${toolName} must be decorated through src/entry.js`);
+}
+assert.equal(typeof loadOnlyTools.get("plan_write").renderResult, "function");
 
 console.log("runtime entry registration test passed");
