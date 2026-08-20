@@ -28,6 +28,8 @@ export class ToolProfileController {
       ["plan", []],
       ["execution", []],
     ]);
+    // Kept only as an internal compatibility shim for older callers. The
+    // integrated 0.5+ runtime always clears it and persists policy per profile.
     this.permanentlyDisabled = new Set();
   }
 
@@ -108,7 +110,6 @@ export class ToolProfileController {
         plan: this.getEffectiveTools("plan"),
         execution: this.getEffectiveTools("execution"),
       },
-      permanentlyDisabledTools: [...this.permanentlyDisabled].sort((a, b) => a.localeCompare(b, "en")),
       activeTools: this.getEffectiveTools(),
     };
   }
