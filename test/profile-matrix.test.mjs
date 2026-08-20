@@ -13,6 +13,14 @@ const theme = {
   fg(_color, text) { return String(text); },
   bold(text) { return String(text); },
 };
+const ansiTheme = {
+  fg(color, text) {
+    const code = color === "accent" ? 36 : color === "muted" ? 90 : 37;
+    return `\u001b[${code}m${text}\u001b[39m`;
+  },
+  bold(text) { return `\u001b[1m${text}\u001b[22m`; },
+};
+const stripAnsi = (value) => String(value).replace(/\u001b\[[0-9;]*m/g, "");
 const tools = [
   { name: "read", registered: true, builtin: true },
   { name: "grep", registered: true, builtin: true },
@@ -66,6 +74,46 @@ const readRow = rendered.find((line) => line.includes("read"));
 assert.ok(readRow?.includes("●"));
 assert.ok(readRow?.includes("○"));
 assert.equal(readRow?.includes("["), false, "tool toggles should not use small bracket markers");
+
+// ANSI styling must never change visible column positions. Reproduce the
+// reported bug by selecting Normal/read while Plan remains unselected.
+const ansiComponent = new __test.ProfileMatrixComponent({
+  tui: { requestRender() {} },
+  theme: ansiTheme,
+  done: () => {},
+  config: structuredClone(config),
+  defaults,
+  tools,
+  phaseProfiles,
+  copyText: {
+    title: "Only Tools",
+    subtitle: "",
+    model: "Model",
+    effort: "Effort",
+    modelCurrent: "Pi current",
+    effortCurrent: "Pi current",
+    selected: "Selected",
+    lockedRequired: "required",
+    lockedControl: "control",
+    unregistered: "unregistered",
+    editModel: "edit model",
+    editEffort: "edit effort",
+    help: "help",
+  },
+  initialRow: 2,
+  initialCol: 0,
+});
+const ansiRendered = ansiComponent.render(120).map(stripAnsi);
+const ansiModelRow = ansiRendered.find((line) => line.includes("normal/normal-model") && line.includes("planner/planner-model"));
+const ansiReadRow = ansiRendered.find((line) => line.includes("read"));
+assert.ok(ansiModelRow && ansiReadRow);
+const planColumn = ansiModelRow.indexOf("planner/planner-model");
+assert.equal(ansiReadRow.lastIndexOf("○"), planColumn, "Plan tool glyph must stay aligned when the Normal cell is ANSI-styled");
+
+// Selected header/row/cell should receive accent styling.
+const ansiRaw = ansiComponent.render(120);
+assert.ok(ansiRaw.some((line) => line.includes("\u001b[36m") && stripAnsi(line).includes("NORMAL")));
+assert.ok(ansiRaw.some((line) => line.includes("\u001b[36m") && stripAnsi(line).includes("read")));
 
 // Left/right selects the profile column; up/down selects Model/Effort/tool rows.
 component.handleInput("\u001b[C"); // Plan
