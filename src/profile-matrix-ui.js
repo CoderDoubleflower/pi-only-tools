@@ -325,18 +325,29 @@ class ProfileMatrixComponent {
     const availableProfileWidth = Math.max(8, Math.floor((w - labelWidth - gap * 2) / PROFILE_NAMES.length));
     const profileWidth = Math.min(28, availableProfileWidth);
     const pad = (value, size) => truncateToWidth(String(value), Math.max(1, size - 1), "…").padEnd(size);
-    const selectedCell = (value, rowIndex, colIndex) => rowIndex === this.row && colIndex === this.col ? this.theme.bold(value) : value;
-    const rowLabel = (label, rowIndex) => `${rowIndex === this.row ? "›" : " "} ${label}`;
-
-    const header = [pad("", labelWidth)];
-    PROFILE_NAMES.forEach((profile, colIndex) => {
+    const isSelected = (rowIndex, colIndex) => rowIndex === this.row && colIndex === this.col;
+    const styleSelected = (value) => this.theme.fg("accent", this.theme.bold(value));
+    const renderCell = (value, rowIndex, colIndex) => {
+      const padded = pad(value, profileWidth);
+      return isSelected(rowIndex, colIndex) ? styleSelected(padded) : padded;
+    };
+    const renderRowLabel = (label, rowIndex) => {
+      const padded = pad(`${rowIndex === this.row ? "›" : " "} ${label}`, labelWidth);
+      return rowIndex === this.row ? this.theme.fg("accent", this.theme.bold(padded)) : padded;
+    };
+    const renderHeaderCell = (profile, colIndex) => {
       const name = PROFILE_LABELS[profile].toUpperCase();
-      header.push(pad(colIndex === this.col ? `› ${name}` : `  ${name}`, profileWidth));
-    });
+      const padded = pad(colIndex === this.col ? `› ${name}` : `  ${name}`, profileWidth);
+      return colIndex === this.col
+        ? this.theme.fg("accent", this.theme.bold(padded))
+        : this.theme.fg("muted", padded);
+    };
+
+    const header = [pad("", labelWidth), ...PROFILE_NAMES.map(renderHeaderCell)];
 
     const lines = [
       this.theme.bold(this.copy.title),
-      this.theme.fg("muted", header.join(" ".repeat(gap))),
+      header.join(" ".repeat(gap)),
     ];
 
     const modelValues = PROFILE_NAMES.map((profile) => {
@@ -345,8 +356,8 @@ class ProfileMatrixComponent {
       return formatModel(phase, fallback);
     });
     lines.push([
-      pad(rowLabel(this.copy.model, MODEL_ROW), labelWidth),
-      ...modelValues.map((value, colIndex) => pad(selectedCell(value, MODEL_ROW, colIndex), profileWidth)),
+      renderRowLabel(this.copy.model, MODEL_ROW),
+      ...modelValues.map((value, colIndex) => renderCell(value, MODEL_ROW, colIndex)),
     ].join(" ".repeat(gap)));
 
     const effortValues = PROFILE_NAMES.map((profile) => {
@@ -354,8 +365,8 @@ class ProfileMatrixComponent {
       return phase?.thinkingLevel ?? (profile === "normal" ? this.copy.effortCurrent : "inherit");
     });
     lines.push([
-      pad(rowLabel(this.copy.effort, EFFORT_ROW), labelWidth),
-      ...effortValues.map((value, colIndex) => pad(selectedCell(value, EFFORT_ROW, colIndex), profileWidth)),
+      renderRowLabel(this.copy.effort, EFFORT_ROW),
+      ...effortValues.map((value, colIndex) => renderCell(value, EFFORT_ROW, colIndex)),
     ].join(" ".repeat(gap)));
 
     lines.push("");
@@ -365,8 +376,8 @@ class ProfileMatrixComponent {
       const rowIndex = TOOL_ROW_OFFSET + toolIndex;
       const values = PROFILE_NAMES.map((profile) => this.toolCell(profile, tool));
       lines.push([
-        pad(rowLabel(tool.name, rowIndex), labelWidth),
-        ...values.map((value, colIndex) => pad(selectedCell(value, rowIndex, colIndex), profileWidth)),
+        renderRowLabel(tool.name, rowIndex),
+        ...values.map((value, colIndex) => renderCell(value, rowIndex, colIndex)),
       ].join(" ".repeat(gap)));
     });
 

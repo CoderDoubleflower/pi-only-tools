@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+- Fix Profile matrix column drift when the selected cell contains ANSI styling by padding plain text before applying color/bold.
+- Highlight the selected profile header, row label, and cell with the accent color while preserving fixed visual column widths.
+- Add an ANSI-aware regression test that locks Normal/Plan tool-column alignment.
+
 ## 0.5.2
 
 - Use Shift+Tab as the global Normal/Plan toggle in TUI mode.
