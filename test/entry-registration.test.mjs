@@ -35,4 +35,33 @@ try {
   await rm(temp, { recursive: true, force: true });
 }
 
+// A complete ExtensionAPI exposes runtime action methods while loading, but Pi rejects
+// calling them until the runtime is initialized. Registration must therefore be pure.
+const loadingActions = [
+  "getActiveTools",
+  "setActiveTools",
+  "getAllTools",
+  "getFlag",
+  "sendMessage",
+  "sendUserMessage",
+  "appendEntry",
+  "setSessionName",
+  "getSessionName",
+  "setModel",
+  "getThinkingLevel",
+  "setThinkingLevel",
+];
+const loadOnlyApi = {
+  registerTool() {},
+  registerCommand() {},
+  registerFlag() {},
+  on() {},
+};
+for (const name of loadingActions) {
+  loadOnlyApi[name] = () => {
+    throw new Error(`runtime action called during extension loading: ${name}`);
+  };
+}
+assert.doesNotThrow(() => plugin(loadOnlyApi));
+
 console.log("runtime entry registration test passed");

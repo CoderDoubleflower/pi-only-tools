@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+- Defer all ExtensionAPI runtime action calls until Pi has initialized the session runtime.
+- Initialize the normal tool profile during session_start instead of extension registration.
+- Remove the registration-time tool-registry probe; standalone Plan Mode should be uninstalled before using the integrated runtime.
+- Add a regression test that makes runtime actions throw during extension loading.
+
 ## 0.4.0
 
 - Merge Claude-style Plan Mode into pi-only-tools.

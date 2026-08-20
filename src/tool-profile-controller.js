@@ -20,7 +20,9 @@ export class ToolProfileController {
     this.pi = pi;
     this.mode = "normal";
     this.protectedTools = new Set(uniqueToolNames(options.protectedTools));
-    const initial = uniqueToolNames(pi.getActiveTools?.() ?? []);
+    // Extension action methods are unavailable while extensions are being loaded.
+    // The normal profile is initialized from runtime state during session_start instead.
+    const initial = uniqueToolNames(options.initialTools ?? []);
     this.profiles = new Map([
       ["normal", initial],
       ["plan", []],

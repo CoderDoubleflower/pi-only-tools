@@ -1555,9 +1555,6 @@ export default function piOnlyTools(pi) {
         getStage: () => "unavailable",
       };
 
-  if (supportsPlanModeRuntime) {
-    toolProfiles.setProfile("normal", pi.getActiveTools?.() ?? [], { apply: false });
-  }
 
   const openSettings = async (args, ctx) => {
     const requested = args.trim().toLowerCase();
