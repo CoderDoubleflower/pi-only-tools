@@ -1,4 +1,4 @@
-name: Validate Normal Plan architecture
+name: Validate vertical profile matrix
 
 on:
   pull_request:
@@ -14,29 +14,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: feat/profile-tool-matrix
+          ref: feat/vertical-profile-matrix
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Apply final Normal/Plan follow-up
+      - name: Apply staged UX follow-up
         run: |
-          if [ -f scripts/fix-normal-plan-profile.mjs ]; then
-            node --check scripts/fix-normal-plan-profile.mjs
-            node scripts/fix-normal-plan-profile.mjs
-          fi
+          node --check scripts/finalize-vertical-profile-matrix.mjs
+          node scripts/finalize-vertical-profile-matrix.mjs
       - run: npm install --no-package-lock
       - run: npm run build
       - run: npm run check
       - run: npm test
       - run: git diff --check
-      - name: Publish tested correction to feature branch
-        if: ${{ hashFiles('scripts/fix-normal-plan-profile.mjs') != '' }}
+      - name: Publish tested UX to feature branch
         shell: bash
         run: |
-          rm -f scripts/fix-normal-plan-profile.mjs
+          rm -f scripts/finalize-vertical-profile-matrix.mjs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "refactor: execute approved plans with Normal profile"
-          git push origin HEAD:feat/profile-tool-matrix
+          git commit -m "feat: transpose profile matrix UX"
+          git push origin HEAD:feat/vertical-profile-matrix
