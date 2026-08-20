@@ -3,9 +3,11 @@ import {
   __test as codexShellTest,
   createCodexShellExtensionApi,
 } from "./codex-shell-command.js";
+import { createPlanToolUiExtensionApi } from "./plan-tool-ui.js";
 
 export default function piOnlyTools(pi) {
-  return basePlugin(createCodexShellExtensionApi(pi));
+  const codexShellApi = createCodexShellExtensionApi(pi);
+  return basePlugin(createPlanToolUiExtensionApi(codexShellApi));
 }
 
 export const __test = baseTest;
