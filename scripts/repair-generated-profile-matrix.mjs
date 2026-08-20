@@ -17,10 +17,15 @@ await rewrite("src/index.js", (text) => text
     '  pi.registerCommand("only-tools", {\n',
   ));
 
-await rewrite("test/test.mjs", (text) => text.replace(
-  "// Tool execution and Claude-style rendering remain intact.\n// Tool execution and Claude-style rendering remain intact.\n",
-  "// Tool execution and Claude-style rendering remain intact.\n",
-));
+await rewrite("test/test.mjs", (text) => text
+  .replace(
+    "// Tool execution and Claude-style rendering remain intact.\n// Tool execution and Claude-style rendering remain intact.\n",
+    "// Tool execution and Claude-style rendering remain intact.\n",
+  )
+  .replace(
+    'assert.ok(notifications.some((entry) => entry.type === "info" && /Tool settings updated|工具设置已更新/.test(entry.message)));\n',
+    "",
+  ));
 
 await rewrite("README.md", (text) => text.replace(
   "## `shell_command`\n## `shell_command`\n",
