@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2
+
+- Make bare `/only-tools` open the top-level Tool profiles menu.
+- Surface Plan Mode configuration directly from the default `/only-tools` UI.
+- Keep the legacy session tool editor available under Session tools and `/only-tools session`.
+- Add a regression test locking the top-level menu contents.
+
 ## 0.4.1
 
 - Defer all ExtensionAPI runtime action calls until Pi has initialized the session runtime.

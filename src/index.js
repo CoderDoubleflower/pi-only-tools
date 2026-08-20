@@ -1556,24 +1556,35 @@ export default function piOnlyTools(pi) {
       };
 
 
+  const openProfileMenu = async (ctx) => {
+    const labels = isChineseLocale()
+      ? { title: "工具 Profile", session: "会话工具", plan: "Plan 模式", status: "显示有效 Profile", close: "关闭" }
+      : { title: "Tool profiles", session: "Session tools", plan: "Plan Mode", status: "Show effective profiles", close: "Close" };
+    const choice = await ctx.ui.select(labels.title, [labels.session, labels.plan, labels.status, labels.close]);
+    if (choice === labels.session) await openSessionSettings(ctx);
+    else if (choice === labels.plan) await planMode.openConfig(ctx);
+    else if (choice === labels.status) {
+      ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
+    }
+  };
+
   const openSettings = async (args, ctx) => {
     const requested = args.trim().toLowerCase();
     if (["plan", "plan-mode", "profile:plan"].includes(requested)) {
       await planMode.openConfig(ctx);
       return;
     }
-    if (["status", "profiles", "profile"].includes(requested)) {
-      if (requested === "status" || ctx.mode !== "tui") {
-        ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
+    if (requested === "status") {
+      ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
+      return;
+    }
+    if (requested === "" || ["profiles", "profile"].includes(requested)) {
+      if (ctx.mode !== "tui") {
+        if (requested === "") await openSessionSettings(ctx);
+        else ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
         return;
       }
-      const labels = isChineseLocale()
-        ? { title: "工具 Profile", session: "会话工具", plan: "Plan 模式", status: "显示有效 Profile", close: "关闭" }
-        : { title: "Tool profiles", session: "Session tools", plan: "Plan Mode", status: "Show effective profiles", close: "Close" };
-      const choice = await ctx.ui.select(labels.title, [labels.session, labels.plan, labels.status, labels.close]);
-      if (choice === labels.session) await openSessionSettings(ctx);
-      else if (choice === labels.plan) await planMode.openConfig(ctx);
-      else if (choice === labels.status) ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
+      await openProfileMenu(ctx);
       return;
     }
     await openSessionSettings(ctx);
