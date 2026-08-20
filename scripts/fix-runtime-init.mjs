@@ -22,6 +22,13 @@ await replaceOnce(
   "eager normal profile snapshot",
 );
 
+await replaceOnce(
+  "src/plan/index.js",
+  `    const existingPlanTools = new Set(pi.getAllTools().map((tool) => tool.name));\n    const duplicateTools = [ENTER_PLAN_MODE_TOOL, PLAN_WRITE_TOOL, EXIT_PLAN_MODE_TOOL].filter((name) => existingPlanTools.has(name));\n    if (duplicateTools.length > 0) {\n        pi.on("session_start", (_event, ctx) => {\n            ctx.ui.notify(\n                \`Plan Mode is already registered by another extension (\${duplicateTools.join(", ")}). Remove the standalone pi-claude-plan-mode package to use the integrated tool profiles.\`,\n                "warning",\n            );\n        });\n        return { enabled: false, openConfig: openConfiguration, getState: () => state, getStage: () => state?.stage ?? "idle" };\n    }\n`,
+  "",
+  "Plan registration getAllTools duplicate probe",
+);
+
 const entryPath = "test/entry-registration.test.mjs";
 let entryTest = await readFile(entryPath, "utf8");
 const marker = '\nconsole.log("runtime entry registration test passed");\n';
@@ -46,7 +53,7 @@ let changelog = await readFile(changelogPath, "utf8");
 if (!changelog.includes("## 0.4.0")) throw new Error("0.4.0 changelog heading not found");
 changelog = changelog.replace(
   "## 0.4.0",
-  "## 0.4.1\n\n- Defer all ExtensionAPI runtime action calls until Pi has initialized the session runtime.\n- Initialize the normal tool profile during session_start instead of extension registration.\n- Add a regression test that makes runtime actions throw during extension loading.\n\n## 0.4.0",
+  "## 0.4.1\n\n- Defer all ExtensionAPI runtime action calls until Pi has initialized the session runtime.\n- Initialize the normal tool profile during session_start instead of extension registration.\n- Remove the registration-time tool-registry probe; standalone Plan Mode should be uninstalled before using the integrated runtime.\n- Add a regression test that makes runtime actions throw during extension loading.\n\n## 0.4.0",
 );
 await writeFile(changelogPath, changelog, "utf8");
 
