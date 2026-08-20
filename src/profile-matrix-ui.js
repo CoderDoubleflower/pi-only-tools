@@ -320,7 +320,8 @@ class ProfileMatrixComponent {
   render(width) {
     const w = Math.max(40, Math.floor(width));
     const longestTool = this.tools.reduce((max, tool) => Math.max(max, tool.name.length), 0);
-    const labelWidth = Math.min(34, Math.max(12, longestTool + 4));
+    const maxLabelForWidth = Math.max(10, Math.floor(w * 0.4));
+    const labelWidth = Math.min(34, maxLabelForWidth, Math.max(12, longestTool + 4));
     const gap = 2;
     const profileWidth = Math.max(8, Math.floor((w - labelWidth - gap * 2) / PROFILE_NAMES.length));
     const pad = (value, size) => truncateToWidth(String(value), Math.max(1, size - 1), "…").padEnd(size);
@@ -455,10 +456,12 @@ export async function openProfileMatrix(pi, ctx, options) {
     };
     if (result?.action === "model" || result?.action === "thinking") {
       const key = result.profile === "plan" ? "planning" : "normal";
-      phaseProfiles[key] = result.action === "model"
+      const before = JSON.stringify(phaseProfiles[key]);
+      const next = result.action === "model"
         ? await selectModel(ctx, result.profile, phaseProfiles[key])
         : await selectThinking(ctx, result.profile, phaseProfiles[key]);
-      dirty = true;
+      phaseProfiles[key] = next;
+      if (JSON.stringify(next) !== before) dirty = true;
       continue;
     }
     break;
