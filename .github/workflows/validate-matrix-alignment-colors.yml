@@ -1,0 +1,39 @@
+name: Validate matrix alignment colors
+
+on:
+  pull_request:
+    branches:
+      - ci/matrix-alignment-colors
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/fix-matrix-alignment-colors
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply staged fix
+        run: |
+          node --check scripts/fix-profile-matrix-alignment.mjs
+          node scripts/fix-profile-matrix-alignment.mjs
+      - run: npm install --no-package-lock
+      - run: npm run build
+      - run: npm run check
+      - run: npm test
+      - run: git diff --check
+      - name: Publish tested source
+        shell: bash
+        run: |
+          rm -f scripts/fix-profile-matrix-alignment.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: preserve profile matrix alignment with ANSI styling"
+          git push origin HEAD:feat/fix-matrix-alignment-colors
