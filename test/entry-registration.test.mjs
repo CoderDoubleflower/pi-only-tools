@@ -4,6 +4,40 @@ import os from "node:os";
 import path from "node:path";
 
 import plugin from "../src/entry.js";
+import { wrapPlanToolDefinition } from "../src/plan-tool-ui.js";
+
+const planTheme = { fg: (_color, text) => text };
+for (const toolName of ["EnterPlanMode", "plan_write", "ExitPlanMode"]) {
+  const wrapped = wrapPlanToolDefinition({ name: toolName });
+  assert.equal(wrapped.renderShell, "self", `${toolName} must opt out of Pi's padded default tool shell`);
+}
+
+const planWrite = wrapPlanToolDefinition({ name: "plan_write" });
+const renderedPlan = planWrite
+  .renderResult(
+    {
+      content: [
+        {
+          type: "text",
+          text: "Canonical plan updated to revision 2.\nPath: /tmp/plan.md\nSHA-256: abc123",
+        },
+      ],
+      details: {},
+    },
+    { expanded: false, isPartial: false },
+    planTheme,
+    {
+      args: {
+        content:
+          "# Implementation Plan\n\n## Context\nKeep the Plan UI readable.\n\n## Implementation Steps\n1. Render the plan.\n\n## Verification\n- Run tests.\n",
+      },
+    },
+  )
+  .render(400)
+  .join("\n");
+assert.match(renderedPlan, /Canonical plan updated to revision 2/);
+assert.match(renderedPlan, /# Implementation Plan/);
+assert.match(renderedPlan, /## Verification/);
 
 const tools = new Map();
 plugin({
