@@ -67,12 +67,16 @@ pi update --extensions
 ~/.pi/agent/tools.json
 ```
 
-界面把 **Profile 作为行、Tool 作为列**：
+界面转置为 **Normal / Plan 作为列，Model / Effort / Tool 作为行**：
 
 ```text
-Profile     Model                 Think     read      bash      grep      ...
-Normal      provider/model        high       [x]       [x]       [ ]
-Plan        provider/model        xhigh      [x]       [ ]       [x]
+                    Normal                  Plan
+Model               provider/model          provider/model
+Effort              high                    xhigh
+read                [✓]                     [✓]
+bash                [✓]                     [×]
+grep                [×]                     [✓]
+...                 ...                     ...
 ```
 
 在 Pi TUI 中执行：
@@ -83,17 +87,18 @@ Plan        provider/model        xhigh      [x]       [ ]       [x]
 
 操作：
 
-- `↑ / ↓`：选择 Normal / Plan；
-- `← / →`：选择工具列；
-- `Space / Enter`：切换当前 Profile 对该工具的允许状态；
-- `M`：配置当前 Normal/Plan Profile 的模型；
-- `T`：配置当前 Normal/Plan Profile 的思考强度；
+- `↑ / ↓`：选择 Model / Effort / 某个工具行；
+- `← / →`：选择 Normal / Plan 列；
+- `Enter`：Model 行选择模型、Effort 行选择 effort、工具行切换允许状态；
+- `Space`：在工具行切换允许状态；
+- `M`：直接配置当前列的模型；
+- `E / T`：直接配置当前列的 effort（底层仍映射到 Pi thinking level）；
 - `A`：当前 Profile 全选可注册工具；
 - `N`：当前 Profile 清空；
 - `R`：恢复当前 Profile 的默认值；
 - `Esc / S`：保存并关闭。
 
-Normal 与 Plan 的模型/思考强度都在同一界面编辑；选择 inherit 时继承 Pi 当前/default。
+Normal 与 Plan 的模型/effort 都在同一界面编辑；选择 inherit 时继承 Pi 当前/default。工具单元格使用 `[✓]` / `[×]` 表示允许/不允许，`*` 表示该控制工具在当前 Profile 中被锁定，`?` 表示工具当前未注册。工具较多时列表会纵向滚动。
 
 ### Profile 语义
 

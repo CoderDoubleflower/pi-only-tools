@@ -13,10 +13,10 @@ const PROFILE_LABELS = Object.freeze({
   plan: "Plan",
 });
 const CONTROL_TOOLS = new Set([ENTER_PLAN_MODE_TOOL, PLAN_WRITE_TOOL, EXIT_PLAN_MODE_TOOL]);
-const CELL_WIDTH = 11;
-const PROFILE_WIDTH = 11;
-const MODEL_WIDTH = 22;
-const THINK_WIDTH = 9;
+const MODEL_ROW = 0;
+const EFFORT_ROW = 1;
+const TOOL_ROW_OFFSET = 2;
+const MAX_VISIBLE_TOOLS = 18;
 
 function isChineseLocale() {
   const locale = process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || "";
@@ -27,31 +27,37 @@ function copy() {
   return isChineseLocale()
     ? {
         title: "工具 Profile 矩阵",
-        subtitle: "所有勾选都是持久配置；行是 Profile，列是工具。",
+        subtitle: "Normal / Plan 是列；Model、Effort 和工具是行。所有修改都会持久保存。",
+        model: "Model",
+        effort: "Effort",
         modelCurrent: "Pi 当前",
-        thinkingCurrent: "Pi 当前",
+        effortCurrent: "Pi 当前",
         selected: "当前",
         lockedRequired: "Plan 工作流必需",
         lockedControl: "该 Profile 不使用此控制工具",
         unregistered: "当前未注册",
-        help: "↑↓ Profile  ←→ 工具  Space/Enter 切换  M 模型  T 思考强度  A 全选  N 清空  R 重置  Esc 保存",
+        editModel: "Enter：选择模型",
+        editEffort: "Enter：选择 effort",
+        help: "↑↓ 行  ←→ Profile  Enter 编辑/切换  Space 切换工具  M 模型  E/T Effort  A 全选  N 清空  R 重置  Esc 保存",
         saved: "Profile 工具矩阵已保存",
         requiresTui: "Profile 工具矩阵仅在 Pi TUI 模式中可用。",
-        normalModel: "Normal 与 Plan 的模型/思考强度都可在此配置；inherit 表示继承当前/default。",
       }
     : {
         title: "Tool profile matrix",
-        subtitle: "Every selection is persistent; profiles are rows and tools are columns.",
+        subtitle: "Normal / Plan are columns; Model, Effort, and tools are rows. Every change is persistent.",
+        model: "Model",
+        effort: "Effort",
         modelCurrent: "Pi current",
-        thinkingCurrent: "Pi current",
+        effortCurrent: "Pi current",
         selected: "Selected",
         lockedRequired: "required by Plan workflow",
         lockedControl: "control tool is not used by this profile",
         unregistered: "not registered now",
-        help: "↑↓ profile  ←→ tool  Space/Enter toggle  M model  T thinking  A all  N none  R reset  Esc save",
+        editModel: "Enter: choose model",
+        editEffort: "Enter: choose effort",
+        help: "↑↓ row  ←→ profile  Enter edit/toggle  Space toggle tool  M model  E/T effort  A all  N none  R reset  Esc save",
         saved: "Tool profile matrix saved",
         requiresTui: "The tool profile matrix is available only in Pi TUI mode.",
-        normalModel: "Normal and Plan model/thinking are configured here; inherit uses the current/default value.",
       };
 }
 
@@ -71,8 +77,8 @@ function selectableModels(ctx) {
   return [...byKey.values()].sort((a, b) => modelKey(a).localeCompare(modelKey(b)));
 }
 
-function formatModel(profile, normalLabel) {
-  return profile?.provider && profile?.model ? `${profile.provider}/${profile.model}` : normalLabel;
+function formatModel(profile, fallback) {
+  return profile?.provider && profile?.model ? `${profile.provider}/${profile.model}` : fallback;
 }
 
 function clearModel(profile) {
@@ -104,8 +110,8 @@ async function selectModel(ctx, profileName, profile) {
 }
 
 async function selectThinking(ctx, profileName, profile) {
-  const inherit = "Inherit current/default thinking level";
-  const choice = await ctx.ui.select(`${PROFILE_LABELS[profileName]} thinking`, [inherit, ...THINKING_LEVELS]);
+  const inherit = "Inherit current/default effort";
+  const choice = await ctx.ui.select(`${PROFILE_LABELS[profileName]} effort`, [inherit, ...THINKING_LEVELS]);
   if (!choice) return profile;
   if (choice === inherit) return clearThinking(profile);
   return THINKING_LEVELS.includes(choice)
@@ -145,7 +151,7 @@ function storedProfileTools(profile, names) {
   });
 }
 
-function toolColumns(pi, config) {
+function toolRows(pi, config) {
   const registered = new Map();
   for (const tool of pi.getAllTools?.() ?? []) {
     if (!tool?.name) continue;
@@ -173,7 +179,18 @@ function toolColumns(pi, config) {
 }
 
 class ProfileMatrixComponent {
-  constructor({ tui, theme, done, config, defaults, tools, phaseProfiles, copyText }) {
+  constructor({
+    tui,
+    theme,
+    done,
+    config,
+    defaults,
+    tools,
+    phaseProfiles,
+    copyText,
+    initialRow = MODEL_ROW,
+    initialCol = 0,
+  }) {
     this.tui = tui;
     this.theme = theme;
     this.done = done;
@@ -182,18 +199,33 @@ class ProfileMatrixComponent {
     this.tools = tools;
     this.phaseProfiles = phaseProfiles;
     this.copy = copyText;
-    this.row = 0;
-    this.col = 0;
+    this.row = Math.max(0, Math.min(this.rowCount() - 1, initialRow));
+    this.col = Math.max(0, Math.min(PROFILE_NAMES.length - 1, initialCol));
     this.scroll = 0;
     this.dirty = false;
   }
 
+  rowCount() {
+    return TOOL_ROW_OFFSET + this.tools.length;
+  }
+
   currentProfile() {
-    return PROFILE_NAMES[this.row];
+    return PROFILE_NAMES[this.col];
   }
 
   currentTool() {
-    return this.tools[this.col];
+    if (this.row < TOOL_ROW_OFFSET) return undefined;
+    return this.tools[this.row - TOOL_ROW_OFFSET];
+  }
+
+  currentKind() {
+    if (this.row === MODEL_ROW) return "model";
+    if (this.row === EFFORT_ROW) return "effort";
+    return "tool";
+  }
+
+  phaseProfile(profile) {
+    return profile === "plan" ? this.phaseProfiles.planning : this.phaseProfiles.normal;
   }
 
   selectedSet(profile = this.currentProfile()) {
@@ -205,7 +237,16 @@ class ProfileMatrixComponent {
     return lock.locked ? lock.value : this.selectedSet(profile).has(toolName);
   }
 
-  toggleCurrent() {
+  toolCell(profile, tool) {
+    const lock = lockedCell(profile, tool.name);
+    const enabled = this.cellValue(profile, tool.name);
+    let value = enabled ? "[✓]" : "[×]";
+    if (lock.locked) value += "*";
+    if (!tool.registered) value += "?";
+    return value;
+  }
+
+  toggleCurrentTool() {
     const profile = this.currentProfile();
     const tool = this.currentTool();
     if (!tool) return;
@@ -218,7 +259,7 @@ class ProfileMatrixComponent {
     this.dirty = true;
   }
 
-  setRow(mode) {
+  setProfileTools(mode) {
     const profile = this.currentProfile();
     const next = new Set();
     if (mode === "all") {
@@ -233,78 +274,119 @@ class ProfileMatrixComponent {
     this.dirty = true;
   }
 
+  finish(action) {
+    this.done({ action, profile: this.currentProfile(), dirty: this.dirty, row: this.row, col: this.col });
+  }
+
+  activateCurrent() {
+    const kind = this.currentKind();
+    if (kind === "model") this.finish("model");
+    else if (kind === "effort") this.finish("thinking");
+    else this.toggleCurrentTool();
+  }
+
   handleInput(data) {
     if (data === "\u001b[A") this.row = Math.max(0, this.row - 1);
-    else if (data === "\u001b[B") this.row = Math.min(PROFILE_NAMES.length - 1, this.row + 1);
+    else if (data === "\u001b[B") this.row = Math.min(this.rowCount() - 1, this.row + 1);
     else if (data === "\u001b[D") this.col = Math.max(0, this.col - 1);
-    else if (data === "\u001b[C") this.col = Math.min(Math.max(0, this.tools.length - 1), this.col + 1);
-    else if (data === " " || data === "\r") this.toggleCurrent();
-    else if (data.toLowerCase?.() === "a") this.setRow("all");
-    else if (data.toLowerCase?.() === "n") this.setRow("none");
-    else if (data.toLowerCase?.() === "r") this.setRow("reset");
-    else if (data.toLowerCase?.() === "m") this.done({ action: "model", profile: this.currentProfile(), dirty: this.dirty });
-    else if (data.toLowerCase?.() === "t") this.done({ action: "thinking", profile: this.currentProfile(), dirty: this.dirty });
+    else if (data === "\u001b[C") this.col = Math.min(PROFILE_NAMES.length - 1, this.col + 1);
+    else if (data === "\r") this.activateCurrent();
+    else if (data === " " && this.currentKind() === "tool") this.toggleCurrentTool();
+    else if (data.toLowerCase?.() === "a") this.setProfileTools("all");
+    else if (data.toLowerCase?.() === "n") this.setProfileTools("none");
+    else if (data.toLowerCase?.() === "r") this.setProfileTools("reset");
+    else if (data.toLowerCase?.() === "m") this.finish("model");
+    else if (["e", "t"].includes(data.toLowerCase?.())) this.finish("thinking");
     else if (data === "\u001b" || data.toLowerCase?.() === "q" || data.toLowerCase?.() === "s") {
-      this.done({ action: "save", dirty: this.dirty });
+      this.finish("save");
     }
     this.tui.requestRender?.();
   }
 
-  visibleRange(width) {
-    const fixed = PROFILE_WIDTH + MODEL_WIDTH + THINK_WIDTH + 6;
-    const count = Math.max(1, Math.floor((Math.max(1, width) - fixed) / CELL_WIDTH));
-    if (this.col < this.scroll) this.scroll = this.col;
-    if (this.col >= this.scroll + count) this.scroll = this.col - count + 1;
-    const maxStart = Math.max(0, this.tools.length - count);
+  visibleToolRange() {
+    if (this.tools.length <= MAX_VISIBLE_TOOLS) return { start: 0, end: this.tools.length };
+    const selectedTool = Math.max(0, this.row - TOOL_ROW_OFFSET);
+    if (this.row >= TOOL_ROW_OFFSET) {
+      if (selectedTool < this.scroll) this.scroll = selectedTool;
+      if (selectedTool >= this.scroll + MAX_VISIBLE_TOOLS) {
+        this.scroll = selectedTool - MAX_VISIBLE_TOOLS + 1;
+      }
+    }
+    const maxStart = Math.max(0, this.tools.length - MAX_VISIBLE_TOOLS);
     this.scroll = Math.min(this.scroll, maxStart);
-    return { start: this.scroll, end: Math.min(this.tools.length, this.scroll + count) };
+    return { start: this.scroll, end: Math.min(this.tools.length, this.scroll + MAX_VISIBLE_TOOLS) };
   }
 
   render(width) {
     const w = Math.max(40, Math.floor(width));
-    const { start, end } = this.visibleRange(w);
-    const visible = this.tools.slice(start, end);
-    const pad = (value, size) => truncateToWidth(String(value), size - 1, "…").padEnd(size);
-    const header = [pad("Profile", PROFILE_WIDTH), pad("Model", MODEL_WIDTH), pad("Think", THINK_WIDTH)];
-    for (const tool of visible) header.push(pad(tool.name, CELL_WIDTH));
+    const longestTool = this.tools.reduce((max, tool) => Math.max(max, tool.name.length), 0);
+    const maxLabelForWidth = Math.max(10, Math.floor(w * 0.4));
+    const labelWidth = Math.min(34, maxLabelForWidth, Math.max(12, longestTool + 4));
+    const gap = 2;
+    const profileWidth = Math.max(8, Math.floor((w - labelWidth - gap * 2) / PROFILE_NAMES.length));
+    const pad = (value, size) => truncateToWidth(String(value), Math.max(1, size - 1), "…").padEnd(size);
+    const selectedCell = (value, rowIndex, colIndex) => `${rowIndex === this.row && colIndex === this.col ? "› " : "  "}${value}`;
+    const rowLabel = (label, rowIndex) => `${rowIndex === this.row ? ">" : " "} ${label}`;
+
+    const header = [pad("", labelWidth)];
+    PROFILE_NAMES.forEach((profile, colIndex) => {
+      const name = PROFILE_LABELS[profile];
+      header.push(pad(colIndex === this.col ? `[${name}]` : name, profileWidth));
+    });
+
     const lines = [
       this.theme.bold(this.copy.title),
       this.theme.fg("dim", this.copy.subtitle),
       "",
-      this.theme.fg("muted", header.join(" ")),
+      this.theme.fg("muted", header.join(" ".repeat(gap))),
     ];
 
-    PROFILE_NAMES.forEach((profile, rowIndex) => {
-      const phase = profile === "plan" ? this.phaseProfiles.planning : this.phaseProfiles.normal;
-      const model = formatModel(phase, profile === "normal" ? this.copy.modelCurrent : "inherit");
-      const thinking = phase?.thinkingLevel ?? (profile === "normal" ? this.copy.thinkingCurrent : "inherit");
-      const row = [
-        pad(`${rowIndex === this.row ? ">" : " "}${PROFILE_LABELS[profile]}`, PROFILE_WIDTH),
-        pad(model, MODEL_WIDTH),
-        pad(thinking, THINK_WIDTH),
-      ];
-      visible.forEach((tool, offset) => {
-        const absolute = start + offset;
-        const value = this.cellValue(profile, tool.name);
-        const lock = lockedCell(profile, tool.name);
-        let cell = lock.locked ? (value ? "[■]" : "[·]") : value ? "[x]" : "[ ]";
-        if (!tool.registered) cell += "?";
-        if (rowIndex === this.row && absolute === this.col) cell = `>${cell}<`;
-        row.push(pad(cell, CELL_WIDTH));
-      });
-      lines.push(row.join(" "));
+    const modelValues = PROFILE_NAMES.map((profile) => {
+      const phase = this.phaseProfile(profile);
+      const fallback = profile === "normal" ? this.copy.modelCurrent : "inherit";
+      return formatModel(phase, fallback);
+    });
+    lines.push([
+      pad(rowLabel(this.copy.model, MODEL_ROW), labelWidth),
+      ...modelValues.map((value, colIndex) => pad(selectedCell(value, MODEL_ROW, colIndex), profileWidth)),
+    ].join(" ".repeat(gap)));
+
+    const effortValues = PROFILE_NAMES.map((profile) => {
+      const phase = this.phaseProfile(profile);
+      return phase?.thinkingLevel ?? (profile === "normal" ? this.copy.effortCurrent : "inherit");
+    });
+    lines.push([
+      pad(rowLabel(this.copy.effort, EFFORT_ROW), labelWidth),
+      ...effortValues.map((value, colIndex) => pad(selectedCell(value, EFFORT_ROW, colIndex), profileWidth)),
+    ].join(" ".repeat(gap)));
+
+    lines.push("");
+    const { start, end } = this.visibleToolRange();
+    this.tools.slice(start, end).forEach((tool, visibleIndex) => {
+      const toolIndex = start + visibleIndex;
+      const rowIndex = TOOL_ROW_OFFSET + toolIndex;
+      const values = PROFILE_NAMES.map((profile) => this.toolCell(profile, tool));
+      lines.push([
+        pad(rowLabel(tool.name, rowIndex), labelWidth),
+        ...values.map((value, colIndex) => pad(selectedCell(value, rowIndex, colIndex), profileWidth)),
+      ].join(" ".repeat(gap)));
     });
 
-    const tool = this.currentTool();
-    if (tool) {
-      const profile = this.currentProfile();
-      const lock = lockedCell(profile, tool.name);
-      let detail = `${this.copy.selected}: ${PROFILE_LABELS[profile]} × ${tool.name}`;
-      if (!tool.registered) detail += ` · ${this.copy.unregistered}`;
-      if (lock.locked) detail += ` · ${lock.reason === "required" ? this.copy.lockedRequired : this.copy.lockedControl}`;
-      lines.push("", this.theme.fg("muted", detail));
+    const profile = this.currentProfile();
+    const kind = this.currentKind();
+    let detail = `${this.copy.selected}: ${PROFILE_LABELS[profile]}`;
+    if (kind === "model") detail += ` × ${this.copy.model} · ${this.copy.editModel}`;
+    else if (kind === "effort") detail += ` × ${this.copy.effort} · ${this.copy.editEffort}`;
+    else {
+      const tool = this.currentTool();
+      if (tool) {
+        const lock = lockedCell(profile, tool.name);
+        detail += ` × ${tool.name}`;
+        if (!tool.registered) detail += ` · ${this.copy.unregistered}`;
+        if (lock.locked) detail += ` · ${lock.reason === "required" ? this.copy.lockedRequired : this.copy.lockedControl}`;
+      }
     }
-    if (this.currentProfile() === "normal") lines.push(this.theme.fg("dim", this.copy.normalModel));
+    lines.push("", this.theme.fg("muted", detail));
     lines.push(this.theme.fg("muted", this.copy.help));
     if (start > 0 || end < this.tools.length) {
       lines.push(this.theme.fg("dim", `tools ${start + 1}-${end}/${this.tools.length}`));
@@ -350,8 +432,9 @@ export async function openProfileMatrix(pi, ctx, options) {
     planning: { ...planLoaded.globalConfig.planning },
     normal: { ...planLoaded.globalConfig.normal },
   };
-  const tools = toolColumns(pi, config);
+  const tools = toolRows(pi, config);
   let dirty = loaded.migrated;
+  let cursor = { row: MODEL_ROW, col: 0 };
 
   while (true) {
     const result = await ctx.ui.custom((tui, theme, _keybindings, done) => new ProfileMatrixComponent({
@@ -363,14 +446,22 @@ export async function openProfileMatrix(pi, ctx, options) {
       tools,
       phaseProfiles,
       copyText: text,
+      initialRow: cursor.row,
+      initialCol: cursor.col,
     }));
     dirty = dirty || result?.dirty === true;
+    cursor = {
+      row: Number.isInteger(result?.row) ? result.row : cursor.row,
+      col: Number.isInteger(result?.col) ? result.col : cursor.col,
+    };
     if (result?.action === "model" || result?.action === "thinking") {
       const key = result.profile === "plan" ? "planning" : "normal";
-      phaseProfiles[key] = result.action === "model"
+      const before = JSON.stringify(phaseProfiles[key]);
+      const next = result.action === "model"
         ? await selectModel(ctx, result.profile, phaseProfiles[key])
         : await selectThinking(ctx, result.profile, phaseProfiles[key]);
-      dirty = true;
+      phaseProfiles[key] = next;
+      if (JSON.stringify(next) !== before) dirty = true;
       continue;
     }
     break;
@@ -397,5 +488,5 @@ export const __test = {
   ProfileMatrixComponent,
   lockedCell,
   storedProfileTools,
-  toolColumns,
+  toolRows,
 };

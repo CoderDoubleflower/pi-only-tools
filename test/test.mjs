@@ -175,7 +175,8 @@ assert.ok(matrixLines.some((line) => line.includes("Normal")));
 assert.ok(matrixLines.some((line) => line.includes("Plan")));
 assert.equal(matrixLines.some((line) => line.includes("Execution")), false);
 assert.ok(matrixLines.some((line) => line.includes("Model")));
-assert.ok(matrixLines.some((line) => line.includes("Think")));
+assert.ok(matrixLines.some((line) => line.includes("Effort")));
+assert.ok(matrixLines.some((line) => line.includes("Normal") && line.includes("Plan")));
 
 // Tool execution and Claude-style rendering remain intact.
 const ctx = { cwd: temp };

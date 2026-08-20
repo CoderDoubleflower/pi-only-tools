@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- Transpose `/only-tools` so Normal/Plan are columns and Model/Effort/tools are rows.
+- Make Enter edit Model/Effort or toggle a tool cell, with arrows matching the visible row/column axes.
+- Use clear `[✓]` / `[×]` tool states, keep locked/unregistered markers, and vertically scroll long tool lists.
+- Preserve the selected matrix cell across model/effort pickers and avoid dirty saves when a picker is cancelled.
+
 ## 0.5.0
 
 - Replace session/permanent tool states with one persistent profile × tool allowlist matrix.
