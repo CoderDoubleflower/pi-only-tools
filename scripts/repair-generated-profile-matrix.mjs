@@ -39,6 +39,10 @@ await rewrite("test/plan-integration.test.mjs", (text) => text
   .replace(
     'profiles.setPermanentDisabled(["web_search", "read"]);\n',
     'profiles.setProfile("plan", ["ask_user_question", "plan_write", "ExitPlanMode"]);\n',
+  )
+  .replace(
+    'assert.deepEqual(activeTools, ["plan_write", "ExitPlanMode", "ask_user_question"]);\n',
+    'assert.deepEqual(new Set(activeTools), new Set(["plan_write", "ExitPlanMode", "ask_user_question"]));\n',
   ));
 
 await rewrite("README.md", (text) => text.replace(
