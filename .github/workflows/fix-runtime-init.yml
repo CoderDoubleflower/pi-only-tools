@@ -1,0 +1,50 @@
+name: Validate runtime-init lifecycle fix
+
+on:
+  push:
+    branches:
+      - fix/defer-runtime-actions
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/defer-runtime-actions
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Apply lifecycle fix
+        run: |
+          node --check scripts/fix-runtime-init.mjs
+          node scripts/fix-runtime-init.mjs
+
+      - name: Install dependencies
+        run: npm install --no-package-lock
+
+      - name: Build and test
+        run: |
+          npm run build
+          npm run check
+          npm test
+          git diff --check
+
+      - name: Commit tested fix
+        shell: bash
+        run: |
+          rm -f scripts/fix-runtime-init.mjs
+          rm -f .github/workflows/fix-runtime-init.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: defer runtime actions until session initialization"
+          git push origin HEAD:fix/defer-runtime-actions
