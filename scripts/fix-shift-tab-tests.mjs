@@ -17,6 +17,7 @@ await patch("test/test.mjs", [
 
 await patch("test/profile-matrix.test.mjs", [
   ['const header = rendered.find((line) => line.includes("Normal") && line.includes("Plan"));', 'const header = rendered.find((line) => line.includes("NORMAL") && line.includes("PLAN"));'],
+  ['assert.ok(rendered.some((line) => line.trimStart().startsWith("> Model")));', 'assert.ok(rendered.some((line) => line.trimStart().startsWith("› Model")));'],
 ]);
 
-console.log("Aligned compact matrix header assertions.");
+console.log("Aligned compact matrix header and cursor assertions.");
