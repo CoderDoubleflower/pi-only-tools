@@ -26,7 +26,10 @@ index = index
     'import { CONFIG_DIR_NAME, getAgentDir, getSettingsListTheme } from "@earendil-works/pi-coding-agent";\n',
     'import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";\n',
   )
-  .replace('import { SettingsList, truncateToWidth } from "@earendil-works/pi-tui";\n', "")
+  .replace(
+    'import { SettingsList, truncateToWidth } from "@earendil-works/pi-tui";\n',
+    'import { truncateToWidth } from "@earendil-works/pi-tui";\n',
+  )
   .replace('const PI_STANDARD_DEFAULT_TOOLS = Object.freeze(["read", "bash", "edit", "write"]);\n', "")
   .replace('const TOOLS_STATE_ENTRY = "tools-config";\n', "")
   .replace('const TOOL_ITEM_PREFIX = "tool:";\n', "")
