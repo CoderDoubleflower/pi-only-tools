@@ -1,13 +1,13 @@
 # pi-only-tools
 
-一个面向 Pi coding agent 的统一工具策略 package：既提供 Codex 风格基础工具，也统一管理 normal、Plan 和 execution 三个工具 Profile。
+一个面向 Pi coding agent 的统一工具策略 package：既提供 Codex 风格基础工具，也统一管理 Normal 与 Plan 两个工具 Profile。Plan 批准后直接回到 Normal 执行。
 
 - `shell_command`
 - `apply_patch`
 
 两个工具使用紧凑的终端渲染：调用行显示为 `Bash(...)` / `Update(...)`，结果使用 `⎿` 前缀，长输出默认折叠，文件修改显示增删行统计和带行号的 diff。
 
-从 **0.4.0** 开始，Claude 风格 Plan Mode 已合并进本插件，并与普通工具状态共享同一个 ToolProfileController。原 `/tools` 管理能力仍由 `/only-tools` 提供。同一个 TUI 现在同时管理当前会话工具、永久禁用工具，以及 Pi 内置工具的启动默认值。
+从 **0.5.0** 开始，Normal 与 Plan 两个 Profile 在同一张工具矩阵中持久配置；Plan 批准后直接切回 Normal 执行，不存在独立 Execution Profile。
 
 ## 要求
 
@@ -59,7 +59,21 @@ pi update --extensions
 /reload
 ```
 
-## 工具管理
+## 工具 Profile 矩阵
+
+从 **0.5.0** 开始，`/only-tools` 不再区分“当前会话禁用”和“永久禁用”。工具策略只有一个持久化来源：
+
+```text
+~/.pi/agent/tools.json
+```
+
+界面把 **Profile 作为行、Tool 作为列**：
+
+```text
+Profile     Model                 Think     read      bash      grep      ...
+Normal      provider/model        high       [x]       [x]       [ ]
+Plan        provider/model        xhigh      [x]       [ ]       [x]
+```
 
 在 Pi TUI 中执行：
 
@@ -67,153 +81,49 @@ pi update --extensions
 /only-tools
 ```
 
-也可以使用别名：
+操作：
 
-```text
-/pi-only-tools
-```
+- `↑ / ↓`：选择 Normal / Plan；
+- `← / →`：选择工具列；
+- `Space / Enter`：切换当前 Profile 对该工具的允许状态；
+- `M`：配置当前 Normal/Plan Profile 的模型；
+- `T`：配置当前 Normal/Plan Profile 的思考强度；
+- `A`：当前 Profile 全选可注册工具；
+- `N`：当前 Profile 清空；
+- `R`：恢复当前 Profile 的默认值；
+- `Esc / S`：保存并关闭。
 
-界面通过 Pi 扩展 API 的 `getAllTools()` 获取当前运行时的完整工具列表，因此会包含 Pi 内置工具、普通扩展工具、SDK 工具和 MCP 工具。内置工具通过 `sourceInfo.source === "builtin"` 识别。
+Normal 与 Plan 的模型/思考强度都在同一界面编辑；选择 inherit 时继承 Pi 当前/default。
 
-界面支持：
+### Profile 语义
 
-- 搜索全部工具
-- 逐项切换“启用 / 当前会话禁用 / 永久禁用”
-- 在 session branch 中保存当前启用列表，切换分支时恢复
-- 把永久禁用列表写入 `~/.pi/agent/tools.json`
-- 每次 agent 运行前重新执行永久禁用规则
-- 将当前启用的内置工具设为启动默认值
-- 恢复 Pi 标准默认工具集
-- 一键禁用全部内置工具
-- 一键启用当前检测到的全部内置工具
-- 修改后立即更新当前会话的 active tools
+- `normal`：普通会话以及批准计划后的执行阶段共同使用的持久工具 allowlist、模型和思考强度。
+- `plan`：Plan Mode 的持久工具 allowlist；`plan_write` 与 `ExitPlanMode` 在表格中锁定为必选。
 
-`shell_command` 和 `apply_patch` 与其他扩展工具一样出现在列表中。选择“当前会话禁用”不会改变下一次新会话的启动设置；选择“永久禁用”会对所有会话生效。
+`EnterPlanMode` 只允许出现在 Normal；`plan_write` / `ExitPlanMode` 只允许出现在 Plan。控制工具在不合法的 Profile 中显示为锁定关闭。
 
-### 状态存储
+配置保存后立即更新当前 active profile，同时把 Normal 中启用的 Pi 内置工具同步到官方 `settings.json.defaultTools`，使下次启动的内置工具状态与矩阵一致。
 
-工具状态按作用域分别存储：
+### 旧配置迁移
 
-- 当前会话选择：session 中 `customType: "tools-config"` 的 custom entry。
-- 永久禁用选择：`~/.pi/agent/tools.json` 的 `permanentlyDisabledTools`。
-- 内置工具启动默认值：Pi 官方 `~/.pi/agent/settings.json` 的 `defaultTools`。
-
-这些路径和数据格式与原独立 `/tools` 扩展兼容。删除旧的 `~/.pi/agent/extensions/tools.ts` 后，已有永久禁用和 session branch 状态会由 `/only-tools` 继续读取。
-
-### 复用 Pi 官方配置
-
-配置写入：
-
-```text
-~/.pi/agent/settings.json
-```
-
-设置了自定义 agent 目录时，插件遵循 Pi 的路径规则：
-
-```bash
-PI_CODING_AGENT_DIR=/custom/pi-agent-dir
-```
-
-对应配置路径：
-
-```text
-/custom/pi-agent-dir/settings.json
-```
-
-在界面中选择“将当前内置工具设为启动默认值”后，插件会把当前启用的内置工具写入 `defaultTools`。例如只启用 `read` 和 `bash` 时：
+旧版 `tools.json`：
 
 ```json
 {
-  "defaultTools": [
-    "read",
-    "bash"
-  ]
+  "version": 1,
+  "permanentlyDisabledTools": ["example"]
 }
 ```
 
-选择“禁用全部内置工具”会立即禁用它们并写入：
+会在首次启动时自动迁移为 version 2：原永久禁用项会从 Normal 与 Plan 两个 Profile 的 allowlist 中移除。迁移后不再存在全局 denylist，也不再保存 session branch 的临时工具状态。
 
-```json
-{
-  "defaultTools": []
-}
-```
+原 `claude-plan-mode.json` 中的 `execution` 模型与思考强度会自动作为新的 Normal 配置读取；旧的 Plan tool 列表只用于首次生成 Plan 行默认值，之后工具矩阵以 `tools.json` 为唯一真相。项目级 Plan 配置不再覆盖这个全局矩阵。
 
-选择“恢复 Pi 标准默认值”会删除 `defaultTools` 字段，并立即把当前会话的内置工具恢复为 Pi 标准集合。插件写入时会保留 `settings.json` 中的其他字段。
-
-### Pi 自身的优先级仍然有效
-
-`defaultTools` 只定义启动时的内置工具选择：
-
-- 项目 `.pi/settings.json` 中的 `defaultTools` 会替换全局值；界面检测到项目覆盖时会显示警告。
-- `--tools` 是所有工具的严格 allowlist。
-- `--no-tools` 禁用所有工具。
-- `--no-builtin-tools` 禁用内置默认工具。
-- `--exclude-tools` 在最终工具集上继续排除。
-
-因此，TUI 修改会立即作用于当前会话；下一次启动时仍按 Pi 官方的全局、项目和 CLI 优先级解析，随后再应用 `tools.json` 中的永久禁用规则。
-
-## 统一工具 Profile
-
-插件现在只有一个地方负责调用 Pi 的 `setActiveTools()`，并维护三个独立 Profile：
-
-- `normal`：普通会话工具，由 `/only-tools` 管理；
-- `plan`：Plan Mode 调查工具白名单，并固定加入 `plan_write` 与 `ExitPlanMode`；
-- `execution`：计划批准后的执行工具快照。
-
-永久禁用规则位于所有 Profile 之上。普通会话中禁用某个工具不会阻止 Plan Profile 临时启用它；标记为“永久禁用”则会从 Plan 和 execution 中同时移除。`plan_write` 与 `ExitPlanMode` 是受保护的 workflow 工具，不会进入永久禁用列表。
-
-查看有效 Profile：
+查看运行时最终工具：
 
 ```text
 /only-tools status
-/only-tools profiles
 ```
-
-### Plan Mode 配置
-
-Plan 配置已经成为 pi-only-tools 的一部分：
-
-```text
-/only-tools plan
-/plan config
-```
-
-两条命令打开同一个配置界面，可分别设置：
-
-- Plan Mode 允许使用的工具；
-- Plan 模型与思考强度；
-- Execute 模型与思考强度；
-- 全局配置或受信任项目配置。
-
-“Show effective configuration” 会同时展示 `requestedTools`、经过注册状态和永久禁用规则过滤后的 `effectiveTools`，以及每个不可用工具的原因。这样配置文件与模型最终实际收到的工具不会再悄悄分叉。
-
-默认 Plan 调查工具为：
-
-```text
-read
-grep
-find
-ls
-ask_user_question（若已安装）
-```
-
-配置文件继续兼容原插件：
-
-```text
-~/.pi/agent/claude-plan-mode.json
-<project>/.pi/claude-plan-mode.json
-```
-
-已安装独立 `pi-claude-plan-mode` 的用户无需迁移 JSON，但应卸载旧 package，避免重复注册 `EnterPlanMode`、`plan_write`、`ExitPlanMode` 和 `/plan`：
-
-```bash
-pi remove git:github.com/CoderDoubleflower/pi-claude-plan-mode
-pi update --extensions
-/reload
-```
-
-集成版本检测到旧插件已先注册 Plan 工具时会停止重复注册并显示 warning。
 
 ### Plan workflow
 
@@ -222,12 +132,13 @@ normal
   └─ EnterPlanMode / /plan
        └─ plan
             └─ ExitPlanMode + /plan-approve
-                 └─ execution
-                      └─ /plan finish
-                           └─ normal
+                 └─ normal（执行已批准计划）
+                      └─ /plan finish（仍保持 normal）
 ```
 
-Plan 模式继续使用 canonical plan、五阶段内部规划提示、Context / Implementation Steps / Verification 内容契约、keep-context 执行和 fresh child-session handoff。
+`/plan config` 与 `/only-tools plan` 都直接打开同一个 Profile 矩阵，不再存在第二套 Plan 工具配置界面。
+
+已安装独立 `pi-claude-plan-mode` 的用户仍应卸载旧 package，避免重复注册 Plan workflow。
 
 ## `shell_command`
 

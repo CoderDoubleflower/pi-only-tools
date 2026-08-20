@@ -8,7 +8,7 @@ import { createPlanDocument, ensurePlanDocument, isManagedPlanDocument, isPlanRe
 import { applyProfile, captureCurrentProfile, resolvePhaseProfile } from "./profile.js";
 import { buildExecutionSystemPrompt, buildPlanningSystemPrompt, buildReadySystemPrompt, } from "./prompts.js";
 import { restorePlanModeState, touchState } from "./state.js";
-import { buildExecutionTools, buildIdleTools, buildPlanningTools, getEffectivePlanningToolSelection, getMissingPlanningTools, isPlanningToolAllowed, } from "./tool-set.js";
+import { buildIdleTools, buildPlanningTools, getEffectivePlanningToolSelection, getMissingPlanningTools, isPlanningToolAllowed, } from "./tool-set.js";
 export * from "./config.js";
 export * from "./config-ui.js";
 export * from "./constants.js";
@@ -89,28 +89,29 @@ export function registerClaudePlanMode(pi, options = {}) {
         return new Set(pi.getAllTools().map((tool) => tool.name));
     }
     function selectedPlanningTools(current = state, names = allToolNames()) {
+        if (toolProfiles)
+            return getEffectivePlanningToolSelection(toolProfiles.getRequestedTools("plan"), names);
         return getEffectivePlanningToolSelection(current?.planningTools, names);
     }
     function activePlanningTools(current = state, names = allToolNames()) {
-        const selected = selectedPlanningTools(current, names);
         if (!toolProfiles)
-            return selected;
-        const active = new Set(toolProfiles.getEffectiveTools("plan"));
-        return selected.filter((name) => active.has(name));
+            return selectedPlanningTools(current, names);
+        return getEffectivePlanningToolSelection(toolProfiles.getEffectiveTools("plan"), names);
     }
     function profileForStage() {
-        return state?.stage === "planning" || state?.stage === "ready"
-            ? "plan"
-            : state?.stage === "executing"
-                ? "execution"
-                : "normal";
+        return state?.stage === "planning" || state?.stage === "ready" ? "plan" : "normal";
     }
     function applyActiveTools(toolNames) {
         if (!toolProfiles) {
             pi.setActiveTools(toolNames);
             return toolNames;
         }
-        return toolProfiles.activate(profileForStage(), toolNames);
+        const profile = profileForStage();
+        // Normal is the persistent source of truth. The internal executing state
+        // tracks an approved plan, but it must never overwrite the Normal allowlist.
+        return profile === "normal"
+            ? toolProfiles.activate("normal")
+            : toolProfiles.activate("plan", toolNames);
     }
     function unavailablePlanningTools(toolNames) {
         if (toolProfiles)
@@ -150,52 +151,79 @@ export function registerClaudePlanMode(pi, options = {}) {
             return;
         }
         if (current.stage === "executing" && current.baseline && current.executionProfile) {
-            const tools = buildExecutionTools(current.executionTools ?? current.baseline.tools, names);
+            const tools = buildIdleTools(current.executionTools ?? current.baseline.tools, names);
             applyActiveTools(tools);
-            await applyProfile(pi, ctx, current.executionProfile, current.baseline.profile, "Execution profile");
+            await applyProfile(pi, ctx, current.executionProfile, current.baseline.profile, "Normal profile");
             return;
         }
         if (current.baseline) {
-            applyActiveTools(buildExecutionTools(current.baseline.tools, names));
-            await applyProfile(pi, ctx, current.baseline.profile, current.baseline.profile, "Baseline profile");
+            const tools = buildIdleTools(current.executionTools ?? current.baseline.tools, names);
+            const profile = current.executionProfile ?? current.baseline.profile;
+            applyActiveTools(tools);
+            await applyProfile(pi, ctx, profile, current.baseline.profile, "Normal profile");
             return;
         }
         applyActiveTools(buildIdleTools(pi.getActiveTools(), names));
     }
     async function applySavedConfiguration(ctx) {
-        const current = state;
-        if (!current?.baseline)
-            return;
-        if (current.stage !== "planning" && current.stage !== "ready") {
-            if (current.stage === "executing") {
-                ctx.ui.notify("The configuration was saved and will apply the next time Plan Mode starts; the approved execution snapshot was not changed.", "info");
-            }
-            return;
-        }
         const loaded = loadPlanModeConfig(ctx.cwd, {
             agentDir: getAgentDir(),
             configDirName: CONFIG_DIR_NAME,
-            loadProjectConfig: ctx.isProjectTrusted(),
+            loadProjectConfig: false,
         });
         warnConfig(ctx, loaded.warnings);
-        const names = allToolNames();
-        const planningTools = getEffectivePlanningToolSelection(loaded.config.tools, names);
-        const next = commitState({
-            ...current,
-            planningTools,
-            planningProfile: resolvePhaseProfile(current.baseline.profile, loaded.config.planning),
-            executionProfile: resolvePhaseProfile(current.baseline.profile, loaded.config.execution),
-        }, ctx);
-        await applyStateRuntime(next, ctx);
-        ctx.ui.notify("Plan Mode configuration was applied to the current planning session.", "info");
+        const currentProfile = captureCurrentProfile(pi, ctx);
+        const fallbackProfile = state?.baseline?.profile ?? currentProfile;
+        const normalProfile = resolvePhaseProfile(fallbackProfile, loaded.config.normal);
+        const normalTools = toolProfiles
+            ? toolProfiles.getRequestedTools("normal")
+            : state?.executionTools ?? state?.baseline?.tools ?? pi.getActiveTools();
+
+        if (!state?.baseline) {
+            if (toolProfiles)
+                toolProfiles.activate("normal");
+            await applyProfile(pi, ctx, normalProfile, currentProfile, "Normal profile");
+            return;
+        }
+
+        if (state.stage === "planning" || state.stage === "ready") {
+            const names = allToolNames();
+            const planningTools = selectedPlanningTools(state, names);
+            const next = commitState({
+                ...state,
+                planningTools,
+                planningProfile: resolvePhaseProfile(state.baseline.profile, loaded.config.planning),
+                executionProfile: normalProfile,
+                executionTools: normalTools,
+            }, ctx);
+            await applyStateRuntime(next, ctx);
+            ctx.ui.notify("Profile configuration was applied to the current Plan session.", "info");
+            return;
+        }
+
+        if (state.stage === "executing") {
+            const next = commitState({
+                ...state,
+                executionProfile: normalProfile,
+                executionTools: normalTools,
+            }, ctx);
+            await applyStateRuntime(next, ctx);
+            ctx.ui.notify("Normal profile configuration was applied to the approved-plan execution.", "info");
+            return;
+        }
+
+        applyActiveTools(buildIdleTools(normalTools, allToolNames()));
+        await applyProfile(pi, ctx, normalProfile, fallbackProfile, "Normal profile");
     }
     async function openConfiguration(ctx) {
         await ctx.waitForIdle?.();
-        const result = await openPlanModeConfig(pi, ctx, {
-            agentDir: getAgentDir(),
-            configDirName: CONFIG_DIR_NAME,
-            toolProfiles,
-        });
+        const result = options.openUnifiedConfig
+            ? await options.openUnifiedConfig(ctx)
+            : await openPlanModeConfig(pi, ctx, {
+                agentDir: getAgentDir(),
+                configDirName: CONFIG_DIR_NAME,
+                toolProfiles,
+            });
         if (result.saved)
             await applySavedConfiguration(ctx);
         return result;
@@ -230,10 +258,25 @@ export function registerClaudePlanMode(pi, options = {}) {
                 // by restoring the baseline captured before Plan Mode. A rejected
                 // unsafe state may still provide the last known baseline tool snapshot.
                 const baseline = fallbackState.baseline;
-                applyActiveTools(buildExecutionTools(baseline.tools, allToolNames()));
+                const tools = buildIdleTools(fallbackState.executionTools ?? baseline.tools, allToolNames());
+                const profile = fallbackState.executionProfile ?? baseline.profile;
+                applyActiveTools(tools);
+                await applyProfile(pi, ctx, profile, baseline.profile, "Normal profile");
             }
             else {
-                applyActiveTools(buildIdleTools(pi.getActiveTools(), allToolNames()));
+                if (toolProfiles)
+                    toolProfiles.activate("normal");
+                else
+                    applyActiveTools(buildIdleTools(pi.getActiveTools(), allToolNames()));
+                const loaded = loadPlanModeConfig(ctx.cwd, {
+                    agentDir: getAgentDir(),
+                    configDirName: CONFIG_DIR_NAME,
+                    loadProjectConfig: false,
+                });
+                warnConfig(ctx, loaded.warnings);
+                const currentProfile = captureCurrentProfile(pi, ctx);
+                const normalProfile = resolvePhaseProfile(currentProfile, loaded.config.normal);
+                await applyProfile(pi, ctx, normalProfile, currentProfile, "Normal profile");
             }
         }
         catch (error) {
@@ -297,13 +340,16 @@ export function registerClaudePlanMode(pi, options = {}) {
         const loaded = loadPlanModeConfig(ctx.cwd, {
             agentDir: getAgentDir(),
             configDirName: CONFIG_DIR_NAME,
-            loadProjectConfig: ctx.isProjectTrusted(),
+            loadProjectConfig: false,
         });
         warnConfig(ctx, loaded.warnings);
-        const planningTools = getEffectivePlanningToolSelection(loaded.config.tools, names);
+        const planningTools = selectedPlanningTools(state, names);
         warnUnavailablePlanningTools(ctx, planningTools, "skipped");
         const planningProfile = resolvePhaseProfile(baselineProfile, loaded.config.planning);
-        const executionProfile = resolvePhaseProfile(baselineProfile, loaded.config.execution);
+        const executionProfile = resolvePhaseProfile(baselineProfile, loaded.config.normal);
+        const executionTools = toolProfiles
+            ? toolProfiles.getRequestedTools("normal")
+            : baselineTools;
         const plan = await createPlanDocument(getAgentDir(), options.reason);
         commitState({
             schemaVersion: STATE_SCHEMA_VERSION,
@@ -313,7 +359,7 @@ export function registerClaudePlanMode(pi, options = {}) {
             planningTools,
             planningProfile,
             executionProfile,
-            executionTools: baselineTools,
+            executionTools,
             updatedAt: new Date().toISOString(),
         }, ctx);
         applyActiveTools(buildPlanningTools(planningTools, names));
@@ -339,8 +385,8 @@ export function registerClaudePlanMode(pi, options = {}) {
             approved: undefined,
             source: undefined,
         }, ctx);
-        applyActiveTools(buildExecutionTools(next.baseline.tools, allToolNames()));
-        await applyProfile(pi, ctx, next.baseline.profile, next.baseline.profile, "Baseline profile");
+        applyActiveTools(buildIdleTools(next.executionTools ?? next.baseline.tools, allToolNames()));
+        await applyProfile(pi, ctx, next.executionProfile ?? next.baseline.profile, next.baseline.profile, "Normal profile");
         updateUi(ctx);
     }
     async function editCanonicalPlan(ctx, options = {}) {
@@ -413,8 +459,8 @@ export function registerClaudePlanMode(pi, options = {}) {
         const { state: approvedState } = approvePlan(state, content);
         const executionState = buildExecutionState(approvedState, source);
         commitState(executionState, ctx);
-        applyActiveTools(buildExecutionTools(executionState.executionTools ?? executionState.baseline.tools, allToolNames()));
-        await applyProfile(pi, ctx, executionState.executionProfile, executionState.baseline.profile, "Execution profile");
+        applyActiveTools(buildIdleTools(executionState.executionTools ?? executionState.baseline.tools, allToolNames()));
+        await applyProfile(pi, ctx, executionState.executionProfile, executionState.baseline.profile, "Normal profile");
         updateUi(ctx);
         pi.sendMessage({
             customType: PLAN_HANDOFF_MESSAGE,
@@ -701,7 +747,7 @@ export function registerClaudePlanMode(pi, options = {}) {
             }
             if (["off", "cancel"].includes(normalized)) {
                 await leaveCurrentPlan(ctx);
-                ctx.ui.notify("Plan workflow ended and the pre-Plan profile was restored.", "info");
+                ctx.ui.notify("Plan workflow ended and the Normal profile is active.", "info");
                 return;
             }
             if (normalized === "finish") {
@@ -710,7 +756,7 @@ export function registerClaudePlanMode(pi, options = {}) {
                     return;
                 }
                 await leaveCurrentPlan(ctx);
-                ctx.ui.notify("Execution profile ended and the pre-Plan profile was restored.", "info");
+                ctx.ui.notify("Approved-plan execution finished; the Normal profile remains active.", "info");
                 return;
             }
             if (normalized === "edit") {
@@ -893,6 +939,7 @@ export function registerClaudePlanMode(pi, options = {}) {
         openConfig: openConfiguration,
         getState: () => state,
         getStage: () => state?.stage ?? "idle",
+        applySavedConfiguration,
     };
 }
 export default function claudePlanModeExtension(pi) {

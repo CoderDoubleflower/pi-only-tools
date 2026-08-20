@@ -33,7 +33,7 @@ let sessionName = "plan-test";
 const models = new Map([
   ["base/base-model", { provider: "base", id: "base-model" }],
   ["planner/planner-model", { provider: "planner", id: "planner-model" }],
-  ["executor/executor-model", { provider: "executor", id: "executor-model" }],
+  ["normal/normal-model", { provider: "normal", id: "normal-model" }],
 ]);
 
 const sessionManager = {
@@ -106,13 +106,22 @@ await writeFile(
   JSON.stringify({
     tools: ["read", "web_search", "ask_user_question"],
     planning: { provider: "planner", model: "planner-model", thinkingLevel: "high" },
-    execution: { provider: "executor", model: "executor-model", thinkingLevel: "xhigh" },
+    normal: { provider: "normal", model: "normal-model", thinkingLevel: "xhigh" },
   }),
 );
 
-const profiles = createToolProfileController(pi, { protectedTools: ["plan_write", "ExitPlanMode"] });
-profiles.setPermanentDisabled(["web_search"], { apply: false });
+const profiles = createToolProfileController(pi);
 const plan = registerClaudePlanMode(pi, { toolProfiles: profiles });
+// The integrated extension loads the persistent profile matrix before the Plan
+// session_start hook runs. Mirror that lifecycle here instead of the removed
+// session/permanent denylist model.
+profiles.setProfile("normal", ["shell_command", "apply_patch", "EnterPlanMode"], { apply: false });
+profiles.setProfile(
+  "plan",
+  ["read", "ask_user_question", "plan_write", "ExitPlanMode"],
+  { apply: false },
+);
+profiles.activate("normal");
 assert.equal(plan.enabled, true);
 
 async function emit(event, payload = {}) {
@@ -128,7 +137,6 @@ await emit("session_start", { reason: "startup" });
 await commands.get("plan").handler("on Inspect the repository", ctx);
 assert.equal(profiles.mode, "plan");
 assert.deepEqual(activeTools, ["read", "plan_write", "ExitPlanMode", "ask_user_question"]);
-assert.ok(notifications.some((entry) => entry.message.includes("web_search (permanently disabled)")));
 assert.equal(ctx.model.provider, "planner");
 assert.equal(thinkingLevel, "high");
 
@@ -140,8 +148,8 @@ assert.doesNotMatch(promptResult.systemPrompt, /configured Plan tool allowlist i
 
 profiles.setProfile("normal", ["shell_command"]);
 assert.deepEqual(activeTools, ["read", "plan_write", "ExitPlanMode", "ask_user_question"]);
-profiles.setPermanentDisabled(["web_search", "read"]);
-assert.deepEqual(activeTools, ["plan_write", "ExitPlanMode", "ask_user_question"]);
+profiles.setProfile("plan", ["ask_user_question", "plan_write", "ExitPlanMode"]);
+assert.deepEqual(new Set(activeTools), new Set(["plan_write", "ExitPlanMode", "ask_user_question"]));
 promptResult = await emit("before_agent_start", { systemPrompt: "base" });
 assert.doesNotMatch(promptResult.systemPrompt, /configured Plan tool allowlist is:[^\n]*read/);
 
@@ -152,9 +160,9 @@ assert.equal(entries.filter((entry) => entry.customType === PLAN_STATE_ENTRY).at
 assert.equal(profiles.mode, "plan");
 
 await commands.get("plan-approve").handler("keep", ctx);
-assert.equal(profiles.mode, "execution");
-assert.ok(activeTools.includes("shell_command"));
-assert.equal(ctx.model.provider, "executor");
+assert.equal(profiles.mode, "normal");
+assert.deepEqual(activeTools, ["shell_command"]);
+assert.equal(ctx.model.provider, "normal");
 assert.equal(thinkingLevel, "xhigh");
 assert.ok(sentMessages.some((entry) => entry.message?.customType));
 
