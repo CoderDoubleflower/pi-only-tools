@@ -19,7 +19,6 @@ export class ToolProfileController {
   constructor(pi, options = {}) {
     this.pi = pi;
     this.mode = "normal";
-    this.protectedTools = new Set(uniqueToolNames(options.protectedTools));
     // Extension action methods are unavailable while extensions are being loaded.
     // The normal profile is initialized from runtime state during session_start instead.
     const initial = uniqueToolNames(options.initialTools ?? []);
@@ -28,18 +27,10 @@ export class ToolProfileController {
       ["plan", []],
       ["execution", []],
     ]);
-    // Kept only as an internal compatibility shim for older callers. The
-    // integrated 0.5+ runtime always clears it and persists policy per profile.
-    this.permanentlyDisabled = new Set();
   }
 
   assertProfile(profile) {
     if (!this.profiles.has(profile)) throw new Error(`Unknown tool profile: ${profile}`);
-  }
-
-  setPermanentDisabled(names, options = {}) {
-    this.permanentlyDisabled = new Set(uniqueToolNames(names));
-    return options.apply === false ? this.getEffectiveTools() : this.apply();
   }
 
   setProfile(profile, names, options = {}) {
@@ -72,17 +63,11 @@ export class ToolProfileController {
     );
   }
 
-  isPermanentlyDisabled(name) {
-    return this.permanentlyDisabled.has(name) && !this.protectedTools.has(name);
-  }
-
   getUnavailableTools(names) {
     const registered = this.getRegisteredToolNames();
-    return uniqueToolNames(names).flatMap((name) => {
-      if (!registered.has(name)) return [{ name, reason: "not registered" }];
-      if (this.isPermanentlyDisabled(name)) return [{ name, reason: "permanently disabled" }];
-      return [];
-    });
+    return uniqueToolNames(names).flatMap((name) =>
+      registered.has(name) ? [] : [{ name, reason: "not registered" }],
+    );
   }
 
   getEffectiveTools(profile = this.mode) {
