@@ -111,8 +111,19 @@ await writeFile(
 );
 
 const profiles = createToolProfileController(pi, { protectedTools: ["plan_write", "ExitPlanMode"] });
-profiles.setPermanentDisabled(["web_search"], { apply: false });
 const plan = registerClaudePlanMode(pi, { toolProfiles: profiles });
+// The integrated extension loads the persistent profile matrix before the Plan
+// session_start hook runs. Mirror that lifecycle here instead of the removed
+// session/permanent denylist model.
+profiles.setPermanentDisabled([], { apply: false });
+profiles.setProfile("normal", ["shell_command", "apply_patch", "EnterPlanMode"], { apply: false });
+profiles.setProfile(
+  "plan",
+  ["read", "ask_user_question", "plan_write", "ExitPlanMode"],
+  { apply: false },
+);
+profiles.setProfile("execution", ["shell_command", "apply_patch"], { apply: false });
+profiles.activate("normal");
 assert.equal(plan.enabled, true);
 
 async function emit(event, payload = {}) {
@@ -128,7 +139,6 @@ await emit("session_start", { reason: "startup" });
 await commands.get("plan").handler("on Inspect the repository", ctx);
 assert.equal(profiles.mode, "plan");
 assert.deepEqual(activeTools, ["read", "plan_write", "ExitPlanMode", "ask_user_question"]);
-assert.ok(notifications.some((entry) => entry.message.includes("web_search (permanently disabled)")));
 assert.equal(ctx.model.provider, "planner");
 assert.equal(thinkingLevel, "high");
 
@@ -140,8 +150,8 @@ assert.doesNotMatch(promptResult.systemPrompt, /configured Plan tool allowlist i
 
 profiles.setProfile("normal", ["shell_command"]);
 assert.deepEqual(activeTools, ["read", "plan_write", "ExitPlanMode", "ask_user_question"]);
-profiles.setPermanentDisabled(["web_search", "read"]);
-assert.deepEqual(activeTools, ["plan_write", "ExitPlanMode", "ask_user_question"]);
+profiles.setProfile("plan", ["ask_user_question", "plan_write", "ExitPlanMode"]);
+assert.deepEqual(new Set(activeTools), new Set(["plan_write", "ExitPlanMode", "ask_user_question"]));
 promptResult = await emit("before_agent_start", { systemPrompt: "base" });
 assert.doesNotMatch(promptResult.systemPrompt, /configured Plan tool allowlist is:[^\n]*read/);
 

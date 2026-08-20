@@ -8,6 +8,11 @@ import { CONFIG_DIR_NAME, getAgentDir, getSettingsListTheme } from "@earendil-wo
 import { SettingsList, truncateToWidth } from "@earendil-works/pi-tui";
 import { createToolProfileController } from "./tool-profile-controller.js";
 import { registerClaudePlanMode } from "./plan/index.js";
+import { loadPlanModeConfig } from "./plan/config.js";
+import { ENTER_PLAN_MODE_TOOL } from "./plan/constants.js";
+import { getEffectivePlanningToolSelection } from "./plan/tool-set.js";
+import { loadProfileConfig, PROFILE_NAMES, saveProfileConfig } from "./profile-config.js";
+import { openProfileMatrix, runtimeToolsForProfile } from "./profile-matrix-ui.js";
 
 const ONLY_TOOLS = Object.freeze(["shell_command", "apply_patch"]);
 const PI_STANDARD_DEFAULT_TOOLS = Object.freeze(["read", "bash", "edit", "write"]);
@@ -1233,302 +1238,66 @@ export default function piOnlyTools(pi) {
 
   const toolProfiles = createToolProfileController(pi, { protectedTools: PLAN_REQUIRED_TOOLS });
 
-  let enabledTools = new Set();
-  let permanentlyDisabledTools = new Set();
-  let managedTools = [];
+  let loadedProfileConfig;
+  let planMode;
 
-  const applyManagedTools = () => {
-    const available = new Set(managedTools.map((tool) => tool.name));
-    const next = [...enabledTools].filter((name) => available.has(name));
-    toolProfiles.setPermanentDisabled(permanentlyDisabledTools, { apply: false });
-    return toolProfiles.setProfile("normal", next);
+  const getProfileDefaults = (ctx) => {
+    const allNames = new Set((pi.getAllTools?.() ?? []).map((tool) => tool.name));
+    const normal = (pi.getActiveTools?.() ?? []).filter((name) => !PLAN_REQUIRED_TOOL_SET.has(name));
+    const planConfig = loadPlanModeConfig(ctx.cwd, {
+      agentDir: getAgentDir(),
+      configDirName: CONFIG_DIR_NAME,
+      loadProjectConfig: false,
+    });
+    const plan = getEffectivePlanningToolSelection(planConfig.globalConfig.tools, allNames);
+    const execution = normal.filter((name) => name !== ENTER_PLAN_MODE_TOOL);
+    return { normal, plan, execution };
   };
 
-  const persistSessionState = () => {
-    pi.appendEntry?.(TOOLS_STATE_ENTRY, { enabledTools: [...enabledTools] });
+  const applyProfileConfig = (config) => {
+    toolProfiles.setPermanentDisabled([], { apply: false });
+    for (const profile of PROFILE_NAMES) {
+      toolProfiles.setProfile(
+        profile,
+        runtimeToolsForProfile(profile, config.profiles[profile]),
+        { apply: false },
+      );
+    }
+    return toolProfiles.apply();
   };
 
   const restoreToolState = async (ctx) => {
-    const copy = settingsCopy();
-    managedTools = getAllManagedTools(pi);
-    try {
-      permanentlyDisabledTools = new Set(await readPermanentlyDisabledTools());
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`${copy.toolsReadError}: ${message}`, "error");
-      permanentlyDisabledTools = new Set();
-    }
-
-    toolProfiles.setPermanentDisabled(permanentlyDisabledTools, { apply: false });
-
-    let savedTools;
-    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
-      if (entry.type !== "custom" || entry.customType !== TOOLS_STATE_ENTRY) continue;
-      if (Array.isArray(entry.data?.enabledTools)) savedTools = normalizeToolNameList(entry.data.enabledTools);
-    }
-
-    const available = new Set(managedTools.map((tool) => tool.name));
-    enabledTools = new Set(
-      (savedTools ?? pi.getActiveTools?.() ?? []).filter((name) => available.has(name)),
-    );
-    applyManagedTools();
+    const defaults = getProfileDefaults(ctx);
+    const loaded = await loadProfileConfig(getToolsConfigPath(), defaults);
+    for (const warning of loaded.warnings) ctx.ui.notify(warning, "warning");
+    loadedProfileConfig = loaded.config;
+    if (loaded.migrated) loadedProfileConfig = await saveProfileConfig(getToolsConfigPath(), loadedProfileConfig);
+    applyProfileConfig(loadedProfileConfig);
   };
 
   pi.on?.("session_start", async (_event, ctx) => restoreToolState(ctx));
   pi.on?.("session_tree", async (_event, ctx) => restoreToolState(ctx));
-  pi.on?.("before_agent_start", async (_event, ctx) => {
-    const copy = settingsCopy();
-    try {
-      permanentlyDisabledTools = new Set(await readPermanentlyDisabledTools());
-      toolProfiles.setPermanentDisabled(permanentlyDisabledTools, { apply: false });
-      toolProfiles.apply();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`${copy.toolsReadError}: ${message}`, "error");
-    }
+  pi.on?.("before_agent_start", async () => {
+    toolProfiles.setPermanentDisabled([], { apply: false });
+    toolProfiles.apply();
   });
 
-  const openSessionSettings = async (ctx) => {
-    const copy = settingsCopy();
-    if (ctx.mode !== "tui") {
-      ctx.ui.notify(copy.requiresTui, "warning");
-      return;
-    }
-
-    const builtins = getBuiltinTools(pi);
-    managedTools = getAllManagedTools(pi);
-    if (managedTools.length === 0) {
-      ctx.ui.notify(copy.noTools, "warning");
-      return;
-    }
-
-    for (const name of pi.getActiveTools?.() ?? []) enabledTools.add(name);
-
-    try {
-      permanentlyDisabledTools = new Set(await readPermanentlyDisabledTools());
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`${copy.toolsReadError}: ${message}`, "error");
-      return;
-    }
-
-    const globalSettingsPath = getGlobalSettingsPath();
-    let globalSelection;
-    try {
-      globalSelection = await readDefaultToolsSetting(globalSettingsPath);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      ctx.ui.notify(`${copy.readError}: ${message}`, "error");
-      return;
-    }
-
-    let projectOverridesGlobal = false;
-    try {
-      const projectSelection = await readDefaultToolsSetting(getProjectSettingsPath(ctx.cwd));
-      projectOverridesGlobal = projectSelection.defaultTools !== undefined;
-    } catch {
-      // The global editor still works even when an unrelated project settings file is malformed.
-    }
-
-    const detectedNames = new Set(builtins.map((tool) => tool.name));
-    let usePiDefaults = globalSelection.defaultTools === undefined;
-    let unknownConfiguredNames = usePiDefaults
-      ? []
-      : globalSelection.defaultTools.filter((name) => !detectedNames.has(name));
-    let enabledBuiltins = new Set(
-      usePiDefaults
-        ? standardDefaultBuiltinNames(builtins)
-        : globalSelection.defaultTools.filter((name) => detectedNames.has(name)),
-    );
-    let dirty = false;
-    let saveFailed = false;
-    let settingsSaveQueue = Promise.resolve();
-    let toolsSaveQueue = Promise.resolve();
-
-    const scheduleSettingsSave = (selection) => {
-      const snapshot = selection === undefined
-        ? undefined
-        : [...new Set([...unknownConfiguredNames, ...selection])].sort((a, b) => a.localeCompare(b, "en"));
-      settingsSaveQueue = settingsSaveQueue
-        .then(() => writeDefaultToolsSetting(snapshot, globalSettingsPath))
-        .catch((error) => {
-          saveFailed = true;
-          const message = error instanceof Error ? error.message : String(error);
-          ctx.ui.notify(`${copy.saveError}: ${message}`, "error");
-        });
-      return settingsSaveQueue;
-    };
-
-    const scheduleToolsSave = () => {
-      const snapshot = [...permanentlyDisabledTools];
-      toolsSaveQueue = toolsSaveQueue
-        .then(() => writePermanentlyDisabledTools(snapshot))
-        .catch((error) => {
-          saveFailed = true;
-          const message = error instanceof Error ? error.message : String(error);
-          ctx.ui.notify(`${copy.toolsSaveError}: ${message}`, "error");
-        });
-      return toolsSaveQueue;
-    };
-
-    await ctx.ui.custom((tui, theme, _keybindings, done) => {
-      let settingsList;
-      const valuesFor = (name) => {
-        if (permanentlyDisabledTools.has(name)) return copy.permanentlyDisabled;
-        return enabledTools.has(name) ? copy.enabled : copy.disabled;
-      };
-      const items = [
-        {
-          id: ACTION_SAVE_CURRENT,
-          label: copy.saveCurrent,
-          currentValue: copy.run,
-          values: [copy.run],
-          description: copy.saveCurrentDescription,
-        },
-        {
-          id: ACTION_USE_PI_DEFAULTS,
-          label: copy.useDefaults,
-          currentValue: copy.run,
-          values: [copy.run],
-          description: copy.useDefaultsDescription,
-        },
-        {
-          id: ACTION_DISABLE_ALL,
-          label: copy.disableAll,
-          currentValue: copy.run,
-          values: [copy.run],
-          description: copy.disableAllDescription,
-        },
-        {
-          id: ACTION_ENABLE_ALL,
-          label: copy.enableAll,
-          currentValue: copy.run,
-          values: [copy.run],
-          description: copy.enableAllDescription,
-        },
-        ...managedTools.map((tool) => ({
-          id: `${TOOL_ITEM_PREFIX}${tool.name}`,
-          label: tool.name,
-          currentValue: valuesFor(tool.name),
-          values: [copy.enabled, copy.disabled, copy.permanentlyDisabled],
-          description: tool.description,
-        })),
-      ];
-
-      const updateAllRows = () => {
-        for (const tool of managedTools) {
-          settingsList.updateValue(`${TOOL_ITEM_PREFIX}${tool.name}`, valuesFor(tool.name));
-        }
-      };
-
-      const commitChange = ({ savePermanent = false, saveSession = true } = {}) => {
-        dirty = true;
-        applyManagedTools();
-        if (saveSession) persistSessionState();
-        if (savePermanent) void scheduleToolsSave();
-        tui.requestRender?.();
-      };
-
-      const onChange = (id, newValue) => {
-        if (id === ACTION_SAVE_CURRENT) {
-          usePiDefaults = false;
-          enabledBuiltins = new Set(
-            builtins
-              .map((tool) => tool.name)
-              .filter((name) => enabledTools.has(name) && !permanentlyDisabledTools.has(name)),
-          );
-          void scheduleSettingsSave(enabledBuiltins);
-          commitChange({ saveSession: false });
-          return;
-        }
-        if (id === ACTION_USE_PI_DEFAULTS) {
-          usePiDefaults = true;
-          unknownConfiguredNames = [];
-          enabledBuiltins = new Set(standardDefaultBuiltinNames(builtins));
-          const builtinNames = new Set(builtins.map((tool) => tool.name));
-          enabledTools = new Set([...enabledTools].filter((name) => !builtinNames.has(name)));
-          for (const name of enabledBuiltins) enabledTools.add(name);
-          updateAllRows();
-          void scheduleSettingsSave(undefined);
-          commitChange();
-          return;
-        }
-        if (id === ACTION_DISABLE_ALL) {
-          usePiDefaults = false;
-          unknownConfiguredNames = [];
-          enabledBuiltins = new Set();
-          const builtinNames = new Set(builtins.map((tool) => tool.name));
-          enabledTools = new Set([...enabledTools].filter((name) => !builtinNames.has(name)));
-          updateAllRows();
-          void scheduleSettingsSave(enabledBuiltins);
-          commitChange();
-          return;
-        }
-        if (id === ACTION_ENABLE_ALL) {
-          usePiDefaults = false;
-          unknownConfiguredNames = [];
-          enabledBuiltins = new Set(builtins.map((tool) => tool.name));
-          for (const name of enabledBuiltins) {
-            enabledTools.add(name);
-            permanentlyDisabledTools.delete(name);
-          }
-          updateAllRows();
-          void scheduleSettingsSave(enabledBuiltins);
-          commitChange({ savePermanent: true });
-          return;
-        }
-        if (!id.startsWith(TOOL_ITEM_PREFIX)) return;
-
-        const name = id.slice(TOOL_ITEM_PREFIX.length);
-        if (newValue === copy.enabled) {
-          permanentlyDisabledTools.delete(name);
-          enabledTools.add(name);
-        } else if (newValue === copy.disabled) {
-          permanentlyDisabledTools.delete(name);
-          enabledTools.delete(name);
-        } else {
-          permanentlyDisabledTools.add(name);
-          enabledTools.delete(name);
-        }
-        commitChange({ savePermanent: true });
-      };
-
-      const close = () => {
-        void Promise.all([settingsSaveQueue, toolsSaveQueue]).finally(() => done(undefined));
-      };
-
-      settingsList = new SettingsList(
-        items,
-        Math.min(16, Math.max(8, items.length)),
-        getSettingsListTheme(),
-        onChange,
-        close,
-        { enableSearch: true },
-      );
-
-      return new ToolSettingsComponent(settingsList, tui, () => {
-        const mode = usePiDefaults ? copy.modeDefaults : copy.modeCustom;
-        const lines = [
-          theme.bold(copy.title),
-          theme.fg("dim", copy.subtitle),
-          theme.fg(
-            "muted",
-            `${copy.status(
-              [...enabledTools].filter((name) => !permanentlyDisabledTools.has(name)).length,
-              managedTools.length,
-              permanentlyDisabledTools.size,
-              mode,
-            )} · ${globalSettingsPath}`,
-          ),
-        ];
-        if (projectOverridesGlobal) lines.push(theme.fg("warning", copy.projectOverride));
-        lines.push(theme.fg("muted", copy.closeHint));
-        return lines;
-      });
+  const openUnifiedSettings = async (ctx) => {
+    const defaults = loadedProfileConfig?.profiles ?? getProfileDefaults(ctx);
+    const result = await openProfileMatrix(pi, ctx, {
+      configPath: getToolsConfigPath(),
+      agentDir: getAgentDir(),
+      configDirName: CONFIG_DIR_NAME,
+      defaults,
+      toolProfiles,
     });
-
-    await Promise.all([settingsSaveQueue, toolsSaveQueue]);
-    if (dirty && !saveFailed) ctx.ui.notify(copy.saved, "info");
+    if (result.saved && result.config) {
+      loadedProfileConfig = result.config;
+      const normal = new Set(result.config.profiles.normal);
+      const builtins = getBuiltinTools(pi);
+      await writeDefaultToolsSetting(builtins.map((tool) => tool.name).filter((name) => normal.has(name)));
+    }
+    return result;
   };
 
   const supportsPlanModeRuntime = [
@@ -1544,8 +1313,8 @@ export default function piOnlyTools(pi) {
     "setThinkingLevel",
   ].every((name) => typeof pi[name] === "function");
 
-  const planMode = supportsPlanModeRuntime
-    ? registerClaudePlanMode(pi, { toolProfiles })
+  planMode = supportsPlanModeRuntime
+    ? registerClaudePlanMode(pi, { toolProfiles, openUnifiedConfig: openUnifiedSettings })
     : {
         enabled: false,
         async openConfig(ctx) {
@@ -1556,38 +1325,18 @@ export default function piOnlyTools(pi) {
       };
 
 
-  const openProfileMenu = async (ctx) => {
-    const labels = isChineseLocale()
-      ? { title: "工具 Profile", session: "会话工具", plan: "Plan 模式", status: "显示有效 Profile", close: "关闭" }
-      : { title: "Tool profiles", session: "Session tools", plan: "Plan Mode", status: "Show effective profiles", close: "Close" };
-    const choice = await ctx.ui.select(labels.title, [labels.session, labels.plan, labels.status, labels.close]);
-    if (choice === labels.session) await openSessionSettings(ctx);
-    else if (choice === labels.plan) await planMode.openConfig(ctx);
-    else if (choice === labels.status) {
-      ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
-    }
-  };
-
   const openSettings = async (args, ctx) => {
     const requested = args.trim().toLowerCase();
-    if (["plan", "plan-mode", "profile:plan"].includes(requested)) {
-      await planMode.openConfig(ctx);
-      return;
-    }
     if (requested === "status") {
       ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
       return;
     }
-    if (requested === "" || ["profiles", "profile"].includes(requested)) {
-      if (ctx.mode !== "tui") {
-        if (requested === "") await openSessionSettings(ctx);
-        else ctx.ui.notify(JSON.stringify({ planStage: planMode.getStage?.(), ...toolProfiles.snapshot() }, null, 2), "info");
-        return;
-      }
-      await openProfileMenu(ctx);
+    if (["", "profiles", "profile", "plan", "plan-mode", "session", "tools"].includes(requested)) {
+      const result = await openUnifiedSettings(ctx);
+      if (result.saved) await planMode.applySavedConfiguration?.(ctx);
       return;
     }
-    await openSessionSettings(ctx);
+    ctx.ui.notify("Use /only-tools to edit the persistent profile × tool matrix, or /only-tools status to inspect effective tools.", "info");
   };
 
   pi.registerCommand("only-tools", {

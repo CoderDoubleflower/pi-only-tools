@@ -63,7 +63,13 @@ export function buildPlanningTools(selectedOrAll, maybeAll) {
     ]);
 }
 export function buildExecutionTools(baseline, allToolNames) {
-    return buildIdleTools(baseline, allToolNames);
+    return unique(
+        baseline.filter((name) =>
+            allToolNames.has(name) &&
+            name !== ENTER_PLAN_MODE_TOOL &&
+            name !== PLAN_WRITE_TOOL &&
+            name !== EXIT_PLAN_MODE_TOOL),
+    );
 }
 export function isPlanningToolAllowed(toolName, selectedOrAll, maybeAll) {
     const { selected, allToolNames } = resolveSelectionArgs(selectedOrAll, maybeAll);

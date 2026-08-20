@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Replace session/permanent tool states with one persistent profile × tool allowlist matrix.
+- Configure Normal, Plan, and Execution tool access side-by-side in one TUI.
+- Keep Plan/Execution model and thinking settings in the same matrix screen.
+- Migrate legacy permanentlyDisabledTools into profile omissions and stop applying a global denylist at runtime.
+- Make the Execution profile independent from Normal and hide Plan control tools outside their valid profile.
+
 ## 0.4.2
 
 - Make bare `/only-tools` open the top-level Tool profiles menu.

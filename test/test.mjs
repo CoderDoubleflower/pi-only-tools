@@ -115,15 +115,18 @@ const malformedSettingsPath = path.join(temp, "bad-settings.json");
 await writeFile(malformedSettingsPath, JSON.stringify({ defaultTools: "bash" }));
 await assert.rejects(__test.readDefaultToolsSetting(malformedSettingsPath), /defaultTools must be an array/);
 
-// Seed official global and project settings for the TUI tests.
+// Unified profile matrix: legacy permanent/session state migrates once, then
+// all tool choices are persistent per-profile allowlists.
 await writeFile(
   globalSettingsPath,
-  `${JSON.stringify({ theme: "dark", defaultTools: ["read", "bash"] }, null, 2)}\n`,
+  `{
+  "theme": "dark",
+  "defaultTools": [
+    "read",
+    "bash"
+  ]
+}\n`,
 );
-const projectSettingsPath = __test.getProjectSettingsPath(temp);
-await mkdir(path.dirname(projectSettingsPath), { recursive: true });
-await writeFile(projectSettingsPath, `${JSON.stringify({ defaultTools: ["read"] }, null, 2)}\n`);
-
 const notifications = [];
 const sessionManager = {
   getBranch() {
@@ -131,158 +134,50 @@ const sessionManager = {
   },
 };
 const eventContext = {
-  sessionManager,
-  ui: {
-    notify(message, type) {
-      notifications.push({ message, type });
-    },
-  },
-};
-
-// Migrate the old /tools state formats without changing their paths or custom type.
-sessionEntries.push({
-  type: "custom",
-  customType: "tools-config",
-  data: { enabledTools: [...activeTools] },
-});
-await handlers.get("session_start")[0]({}, eventContext);
-assert.equal(activeTools.includes("custom_extra"), false);
-assert.equal(activeTools.includes("shell_command"), true);
-
-// Reset to an unrestricted state for the TUI interaction tests.
-await __test.writePermanentlyDisabledTools([]);
-sessionEntries.length = 0;
-activeTools = ["read", "bash", "edit", "write", "custom_extra", "shell_command", "apply_patch"];
-await handlers.get("session_start")[0]({}, eventContext);
-
-await commands.get("only-tools").handler("", {
-  mode: "print",
-  ui: {
-    notify(message, type) {
-      notifications.push({ message, type });
-    },
-  },
-});
-assert.ok(notifications.some((entry) => entry.type === "warning" && /TUI/.test(entry.message)));
-
-// Bare /only-tools opens the top-level profile menu so Plan configuration is discoverable.
-let topLevelMenu;
-await commands.get("only-tools").handler("", {
-  mode: "tui",
   cwd: temp,
   sessionManager,
   ui: {
     notify(message, type) {
       notifications.push({ message, type });
     },
-    async select(title, options) {
-      topLevelMenu = { title, options: [...options] };
-      return "Close";
-    },
-  },
-});
-assert.equal(topLevelMenu.title, "Tool profiles");
-assert.deepEqual(topLevelMenu.options, ["Session tools", "Plan Mode", "Show effective profiles", "Close"]);
-
-const theme = {
-  fg(_color, text) {
-    return String(text);
-  },
-  bold(text) {
-    return String(text);
   },
 };
+await handlers.get("session_start")[0]({}, eventContext);
+let migratedProfileConfig = JSON.parse(await readFile(toolsConfigPath, "utf8"));
+assert.equal(migratedProfileConfig.version, 2);
+assert.ok(Array.isArray(migratedProfileConfig.profiles.normal));
+assert.ok(Array.isArray(migratedProfileConfig.profiles.plan));
+assert.ok(Array.isArray(migratedProfileConfig.profiles.execution));
+assert.equal(migratedProfileConfig.profiles.normal.includes("custom_extra"), false);
 
-async function openToolSettings(interact) {
-  let rendered = [];
-  await commands.get("only-tools").handler("session", {
-    mode: "tui",
-    cwd: temp,
-    sessionManager,
-    ui: {
-      notify(message, type) {
-        notifications.push({ message, type });
-      },
-      async custom(factory) {
-        return new Promise((resolve) => {
-          const tui = { requestRender() {} };
-          const component = factory(tui, theme, {}, resolve);
-          rendered = component.render(120);
-          interact(component);
-        });
-      },
+const theme = {
+  fg(_color, text) { return String(text); },
+  bold(text) { return String(text); },
+};
+let matrixLines = [];
+await commands.get("only-tools").handler("", {
+  mode: "tui",
+  hasUI: true,
+  cwd: temp,
+  sessionManager,
+  ui: {
+    notify(message, type) { notifications.push({ message, type }); },
+    async custom(factory) {
+      return new Promise((resolve) => {
+        const tui = { requestRender() {} };
+        const component = factory(tui, theme, {}, resolve);
+        matrixLines = component.render(120);
+        component.handleInput("\u001b");
+      });
     },
-  });
-  return rendered;
-}
-
-function moveDown(component, count) {
-  for (let index = 0; index < count; index += 1) component.handleInput("\u001b[B");
-}
-
-// Disable all detected built-ins (third action row) and keep every non-builtin active tool.
-let renderedSettings = await openToolSettings((component) => {
-  moveDown(component, 2);
-  component.handleInput("\r");
-  component.handleInput("\u001b");
+  },
 });
-assert.ok(renderedSettings.some((line) => line.includes("bash")));
-assert.ok(renderedSettings.some((line) => line.includes("read")));
-assert.ok(renderedSettings.some((line) => line.includes("project's .pi/settings.json")));
-assert.deepEqual(activeTools, ["custom_extra", "shell_command", "apply_patch"]);
-settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
-assert.deepEqual(settings.defaultTools, []);
-assert.equal(settings.theme, "dark");
-assert.ok(sessionEntries.some((entry) => entry.customType === "tools-config"));
-
-// Restore official Pi defaults by removing defaultTools (second action row).
-renderedSettings = await openToolSettings((component) => {
-  moveDown(component, 1);
-  component.handleInput("\r");
-  component.handleInput("\u001b");
-});
-settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
-assert.equal(Object.hasOwn(settings, "defaultTools"), false);
-for (const name of ["read", "bash", "edit", "write", "custom_extra", "shell_command", "apply_patch"]) {
-  assert.ok(activeTools.includes(name), `expected ${name} to remain or become active`);
-}
-
-// Session-disable one detected built-in (first tool row, after the four actions).
-await openToolSettings((component) => {
-  moveDown(component, 4);
-  component.handleInput("\r");
-  component.handleInput("\u001b");
-});
-settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
-assert.equal(Object.hasOwn(settings, "defaultTools"), false, "session changes must not alter startup defaults");
-assert.equal(activeTools.includes("bash"), false);
-assert.equal(activeTools.includes("custom_extra"), true);
-assert.equal(activeTools.includes("shell_command"), true);
-assert.equal(activeTools.includes("apply_patch"), true);
-
-// Persist the current built-in subset with the first action row.
-await openToolSettings((component) => {
-  component.handleInput("\r");
-  component.handleInput("\u001b");
-});
-settings = JSON.parse(await readFile(globalSettingsPath, "utf8"));
-assert.deepEqual(settings.defaultTools, ["edit", "read", "write"]);
-
-// Permanently disable custom_extra (four actions, four built-ins, then apply_patch and custom_extra).
-await openToolSettings((component) => {
-  moveDown(component, 9);
-  component.handleInput("\r");
-  component.handleInput("\r");
-  component.handleInput("\u001b");
-});
-toolsConfig = JSON.parse(await readFile(toolsConfigPath, "utf8"));
-assert.deepEqual(toolsConfig.permanentlyDisabledTools, ["custom_extra"]);
-assert.equal(activeTools.includes("custom_extra"), false);
-
-// Permanent disables are re-read and enforced before every agent run.
-activeTools.push("custom_extra");
-await handlers.get("before_agent_start")[0]({}, eventContext);
-assert.equal(activeTools.includes("custom_extra"), false);
+assert.ok(matrixLines.some((line) => line.includes("Tool profile matrix")));
+assert.ok(matrixLines.some((line) => line.includes("Normal")));
+assert.ok(matrixLines.some((line) => line.includes("Plan")));
+assert.ok(matrixLines.some((line) => line.includes("Execution")));
+assert.ok(matrixLines.some((line) => line.includes("Model")));
+assert.ok(matrixLines.some((line) => line.includes("Think")));
 
 // Tool execution and Claude-style rendering remain intact.
 const ctx = { cwd: temp };
@@ -414,5 +309,4 @@ assert.ok(patchRenderLines.some((line) => line.includes("1 -old")));
 assert.ok(patchRenderLines.some((line) => line.includes("1 +new")));
 assert.ok(!patchRenderLines.some((line) => line.includes("@@")));
 
-assert.ok(notifications.some((entry) => entry.type === "info" && /Tool settings updated|工具设置已更新/.test(entry.message)));
 console.log("pi-only-tools tests passed");
