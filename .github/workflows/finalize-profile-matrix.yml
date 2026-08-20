@@ -1,0 +1,39 @@
+name: Finalize profile matrix cleanup
+
+on:
+  push:
+    branches:
+      - feat/profile-tool-matrix
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/profile-tool-matrix
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: |
+          node --check scripts/finalize-profile-matrix.mjs
+          node scripts/finalize-profile-matrix.mjs
+      - run: npm install --no-package-lock
+      - run: npm run build
+      - run: npm run check
+      - run: npm test
+      - run: git diff --check
+      - name: Commit tested cleanup
+        shell: bash
+        run: |
+          rm -f scripts/finalize-profile-matrix.mjs
+          rm -f .github/workflows/finalize-profile-matrix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: make profile allowlists the only tool policy"
+          git push origin HEAD:feat/profile-tool-matrix
