@@ -1031,7 +1031,7 @@ export default function piOnlyTools(pi) {
     },
   });
 
-  const toolProfiles = createToolProfileController(pi, { protectedTools: PLAN_REQUIRED_TOOLS });
+  const toolProfiles = createToolProfileController(pi);
 
   let loadedProfileConfig;
   let planMode;

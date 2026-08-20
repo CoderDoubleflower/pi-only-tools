@@ -1,6 +1,6 @@
 # pi-only-tools
 
-一个面向 Pi coding agent 的统一工具策略 package：既提供 Codex 风格基础工具，也统一管理 normal、Plan 和 execution 三个工具 Profile。
+一个面向 Pi coding agent 的统一工具策略 package：既提供 Codex 风格基础工具，也统一管理 Normal 与 Plan 两个工具 Profile。Plan 批准后直接回到 Normal 执行。
 
 - `shell_command`
 - `apply_patch`

@@ -267,10 +267,7 @@ export function registerClaudePlanMode(pi, options = {}) {
                 if (toolProfiles)
                     toolProfiles.activate("normal");
                 else
-                    if (toolProfiles)
-                toolProfiles.activate("normal");
-            else
-                applyActiveTools(buildIdleTools(pi.getActiveTools(), allToolNames()));
+                    applyActiveTools(buildIdleTools(pi.getActiveTools(), allToolNames()));
                 const loaded = loadPlanModeConfig(ctx.cwd, {
                     agentDir: getAgentDir(),
                     configDirName: CONFIG_DIR_NAME,
