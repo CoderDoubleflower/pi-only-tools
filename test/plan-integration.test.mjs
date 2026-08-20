@@ -33,7 +33,7 @@ let sessionName = "plan-test";
 const models = new Map([
   ["base/base-model", { provider: "base", id: "base-model" }],
   ["planner/planner-model", { provider: "planner", id: "planner-model" }],
-  ["executor/executor-model", { provider: "executor", id: "executor-model" }],
+  ["normal/normal-model", { provider: "normal", id: "normal-model" }],
 ]);
 
 const sessionManager = {
@@ -106,7 +106,7 @@ await writeFile(
   JSON.stringify({
     tools: ["read", "web_search", "ask_user_question"],
     planning: { provider: "planner", model: "planner-model", thinkingLevel: "high" },
-    execution: { provider: "executor", model: "executor-model", thinkingLevel: "xhigh" },
+    normal: { provider: "normal", model: "normal-model", thinkingLevel: "xhigh" },
   }),
 );
 
@@ -121,7 +121,6 @@ profiles.setProfile(
   ["read", "ask_user_question", "plan_write", "ExitPlanMode"],
   { apply: false },
 );
-profiles.setProfile("execution", ["shell_command", "apply_patch"], { apply: false });
 profiles.activate("normal");
 assert.equal(plan.enabled, true);
 
@@ -161,9 +160,9 @@ assert.equal(entries.filter((entry) => entry.customType === PLAN_STATE_ENTRY).at
 assert.equal(profiles.mode, "plan");
 
 await commands.get("plan-approve").handler("keep", ctx);
-assert.equal(profiles.mode, "execution");
+assert.equal(profiles.mode, "normal");
 assert.ok(activeTools.includes("shell_command"));
-assert.equal(ctx.model.provider, "executor");
+assert.equal(ctx.model.provider, "normal");
 assert.equal(thinkingLevel, "xhigh");
 assert.ok(sentMessages.some((entry) => entry.message?.customType));
 

@@ -146,7 +146,6 @@ let migratedProfileConfig = JSON.parse(await readFile(toolsConfigPath, "utf8"));
 assert.equal(migratedProfileConfig.version, 2);
 assert.ok(Array.isArray(migratedProfileConfig.profiles.normal));
 assert.ok(Array.isArray(migratedProfileConfig.profiles.plan));
-assert.ok(Array.isArray(migratedProfileConfig.profiles.execution));
 assert.equal(migratedProfileConfig.profiles.normal.includes("custom_extra"), false);
 
 const theme = {
@@ -174,7 +173,7 @@ await commands.get("only-tools").handler("", {
 assert.ok(matrixLines.some((line) => line.includes("Tool profile matrix")));
 assert.ok(matrixLines.some((line) => line.includes("Normal")));
 assert.ok(matrixLines.some((line) => line.includes("Plan")));
-assert.ok(matrixLines.some((line) => line.includes("Execution")));
+assert.equal(matrixLines.some((line) => line.includes("Execution")), false);
 assert.ok(matrixLines.some((line) => line.includes("Model")));
 assert.ok(matrixLines.some((line) => line.includes("Think")));
 

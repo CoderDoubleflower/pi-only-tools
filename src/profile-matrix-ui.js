@@ -11,7 +11,6 @@ import { loadProfileConfig, PROFILE_NAMES, saveProfileConfig } from "./profile-c
 const PROFILE_LABELS = Object.freeze({
   normal: "Normal",
   plan: "Plan",
-  execution: "Execution",
 });
 const CONTROL_TOOLS = new Set([ENTER_PLAN_MODE_TOOL, PLAN_WRITE_TOOL, EXIT_PLAN_MODE_TOOL]);
 const CELL_WIDTH = 11;
@@ -38,7 +37,7 @@ function copy() {
         help: "↑↓ Profile  ←→ 工具  Space/Enter 切换  M 模型  T 思考强度  A 全选  N 清空  R 重置  Esc 保存",
         saved: "Profile 工具矩阵已保存",
         requiresTui: "Profile 工具矩阵仅在 Pi TUI 模式中可用。",
-        normalModel: "Normal 模型与思考强度继续使用 Pi 当前会话设置；Plan/Execution 可在此界面配置。",
+        normalModel: "Normal 与 Plan 的模型/思考强度都可在此配置；inherit 表示继承当前/default。",
       }
     : {
         title: "Tool profile matrix",
@@ -52,7 +51,7 @@ function copy() {
         help: "↑↓ profile  ←→ tool  Space/Enter toggle  M model  T thinking  A all  N none  R reset  Esc save",
         saved: "Tool profile matrix saved",
         requiresTui: "The tool profile matrix is available only in Pi TUI mode.",
-        normalModel: "Normal model/thinking follow the current Pi session; Plan/Execution can be configured here.",
+        normalModel: "Normal and Plan model/thinking are configured here; inherit uses the current/default value.",
       };
 }
 
@@ -135,7 +134,6 @@ function enforceProfileRules(profile, names) {
   } else {
     result.delete(PLAN_WRITE_TOOL);
     result.delete(EXIT_PLAN_MODE_TOOL);
-    if (profile === "execution") result.delete(ENTER_PLAN_MODE_TOOL);
   }
   return [...result];
 }
@@ -277,9 +275,9 @@ class ProfileMatrixComponent {
     ];
 
     PROFILE_NAMES.forEach((profile, rowIndex) => {
-      const phase = profile === "plan" ? this.phaseProfiles.planning : profile === "execution" ? this.phaseProfiles.execution : undefined;
-      const model = profile === "normal" ? this.copy.modelCurrent : formatModel(phase, "inherit");
-      const thinking = profile === "normal" ? this.copy.thinkingCurrent : phase?.thinkingLevel ?? "inherit";
+      const phase = profile === "plan" ? this.phaseProfiles.planning : this.phaseProfiles.normal;
+      const model = formatModel(phase, profile === "normal" ? this.copy.modelCurrent : "inherit");
+      const thinking = phase?.thinkingLevel ?? (profile === "normal" ? this.copy.thinkingCurrent : "inherit");
       const row = [
         pad(`${rowIndex === this.row ? ">" : " "}${PROFILE_LABELS[profile]}`, PROFILE_WIDTH),
         pad(model, MODEL_WIDTH),
@@ -350,7 +348,7 @@ export async function openProfileMatrix(pi, ctx, options) {
   for (const warning of planLoaded.warnings) ctx.ui.notify(warning, "warning");
   const phaseProfiles = {
     planning: { ...planLoaded.globalConfig.planning },
-    execution: { ...planLoaded.globalConfig.execution },
+    normal: { ...planLoaded.globalConfig.normal },
   };
   const tools = toolColumns(pi, config);
   let dirty = loaded.migrated;
@@ -368,11 +366,7 @@ export async function openProfileMatrix(pi, ctx, options) {
     }));
     dirty = dirty || result?.dirty === true;
     if (result?.action === "model" || result?.action === "thinking") {
-      if (result.profile === "normal") {
-        ctx.ui.notify(text.normalModel, "info");
-        continue;
-      }
-      const key = result.profile === "plan" ? "planning" : "execution";
+      const key = result.profile === "plan" ? "planning" : "normal";
       phaseProfiles[key] = result.action === "model"
         ? await selectModel(ctx, result.profile, phaseProfiles[key])
         : await selectThinking(ctx, result.profile, phaseProfiles[key]);
@@ -386,7 +380,7 @@ export async function openProfileMatrix(pi, ctx, options) {
   const savedConfig = await saveProfileConfig(options.configPath, config);
   await savePlanModeConfig(planLoaded.globalPath, {
     planning: phaseProfiles.planning,
-    execution: phaseProfiles.execution,
+    normal: phaseProfiles.normal,
   });
 
   if (options.toolProfiles) {

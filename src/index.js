@@ -9,7 +9,6 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { createToolProfileController } from "./tool-profile-controller.js";
 import { registerClaudePlanMode } from "./plan/index.js";
 import { loadPlanModeConfig } from "./plan/config.js";
-import { ENTER_PLAN_MODE_TOOL } from "./plan/constants.js";
 import { getEffectivePlanningToolSelection } from "./plan/tool-set.js";
 import { loadProfileConfig, PROFILE_NAMES, saveProfileConfig } from "./profile-config.js";
 import { openProfileMatrix, runtimeToolsForProfile } from "./profile-matrix-ui.js";
@@ -1046,8 +1045,7 @@ export default function piOnlyTools(pi) {
       loadProjectConfig: false,
     });
     const plan = getEffectivePlanningToolSelection(planConfig.globalConfig.tools, allNames);
-    const execution = normal.filter((name) => name !== ENTER_PLAN_MODE_TOOL);
-    return { normal, plan, execution };
+    return { normal, plan };
   };
 
   const applyProfileConfig = (config) => {
@@ -1134,7 +1132,7 @@ export default function piOnlyTools(pi) {
   };
 
   pi.registerCommand("only-tools", {
-    description: "Manage the persistent Normal/Plan/Execution tool matrix",
+    description: "Manage the persistent Normal/Plan tool matrix",
     handler: async (args, ctx) => openSettings(args, ctx),
   });
   pi.registerCommand("pi-only-tools", {

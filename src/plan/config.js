@@ -6,7 +6,7 @@ import { THINKING_LEVELS, } from "./types.js";
 export function createEmptyPlanModeConfig() {
     return {
         planning: {},
-        execution: {},
+        normal: {},
     };
 }
 function isRecord(value) {
@@ -79,10 +79,13 @@ function readConfigFile(filePath, warnings) {
             return createEmptyPlanModeConfig();
         }
         const tools = parseTools(parsed.tools, filePath, warnings);
+        const normalKey = parsed.normal !== undefined ? "normal" : parsed.execution !== undefined ? "execution" : "normal";
+        if (parsed.normal === undefined && parsed.execution !== undefined)
+            warnings.push(`${filePath}: migrated legacy "execution" model/thinking profile to "normal".`);
         return {
             ...(tools !== undefined ? { tools } : {}),
             planning: parseProfile(parsed.planning, filePath, "planning", warnings),
-            execution: parseProfile(parsed.execution, filePath, "execution", warnings),
+            normal: parseProfile(parsed[normalKey], filePath, normalKey, warnings),
         };
     }
     catch (error) {
@@ -100,7 +103,7 @@ function serializableConfig(config) {
     return {
         ...(config.tools !== undefined ? { tools: [...new Set(config.tools.map((name) => name.trim()).filter(Boolean))] } : {}),
         planning: { ...config.planning },
-        execution: { ...config.execution },
+        normal: { ...config.normal },
     };
 }
 export async function savePlanModeConfig(filePath, config) {
@@ -140,7 +143,7 @@ export function loadPlanModeConfig(cwd, options) {
                     ? { tools: [...globalConfig.tools] }
                     : {}),
             planning: mergeProfile(globalConfig.planning, projectConfig.planning),
-            execution: mergeProfile(globalConfig.execution, projectConfig.execution),
+            normal: mergeProfile(globalConfig.normal, projectConfig.normal),
         },
     };
 }

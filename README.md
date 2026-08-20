@@ -7,7 +7,7 @@
 
 两个工具使用紧凑的终端渲染：调用行显示为 `Bash(...)` / `Update(...)`，结果使用 `⎿` 前缀，长输出默认折叠，文件修改显示增删行统计和带行号的 diff。
 
-从 **0.5.0** 开始，normal、Plan、execution 三个 Profile 在同一张工具矩阵中持久配置，不再区分会话禁用与永久禁用。
+从 **0.5.0** 开始，Normal 与 Plan 两个 Profile 在同一张工具矩阵中持久配置；Plan 批准后直接切回 Normal 执行，不存在独立 Execution Profile。
 
 ## 要求
 
@@ -71,9 +71,8 @@ pi update --extensions
 
 ```text
 Profile     Model                 Think     read      bash      grep      ...
-Normal      Pi current            Pi current [x]       [x]       [ ]
+Normal      provider/model        high       [x]       [x]       [ ]
 Plan        provider/model        xhigh      [x]       [ ]       [x]
-Execution   provider/model        high       [x]       [x]       [ ]
 ```
 
 在 Pi TUI 中执行：
@@ -84,23 +83,22 @@ Execution   provider/model        high       [x]       [x]       [ ]
 
 操作：
 
-- `↑ / ↓`：选择 Normal / Plan / Execution；
+- `↑ / ↓`：选择 Normal / Plan；
 - `← / →`：选择工具列；
 - `Space / Enter`：切换当前 Profile 对该工具的允许状态；
-- `M`：配置当前 Plan/Execution Profile 的模型；
-- `T`：配置当前 Plan/Execution Profile 的思考强度；
+- `M`：配置当前 Normal/Plan Profile 的模型；
+- `T`：配置当前 Normal/Plan Profile 的思考强度；
 - `A`：当前 Profile 全选可注册工具；
 - `N`：当前 Profile 清空；
 - `R`：恢复当前 Profile 的默认值；
 - `Esc / S`：保存并关闭。
 
-Normal 的模型与思考强度继续跟随 Pi 当前会话；Plan 和 Execution 的模型/思考强度在同一界面编辑。
+Normal 与 Plan 的模型/思考强度都在同一界面编辑；选择 inherit 时继承 Pi 当前/default。
 
 ### Profile 语义
 
-- `normal`：普通会话的持久工具 allowlist。
+- `normal`：普通会话以及批准计划后的执行阶段共同使用的持久工具 allowlist、模型和思考强度。
 - `plan`：Plan Mode 的持久工具 allowlist；`plan_write` 与 `ExitPlanMode` 在表格中锁定为必选。
-- `execution`：批准计划后执行阶段的独立持久 allowlist，不再简单复制 Normal。
 
 `EnterPlanMode` 只允许出现在 Normal；`plan_write` / `ExitPlanMode` 只允许出现在 Plan。控制工具在不合法的 Profile 中显示为锁定关闭。
 
@@ -117,9 +115,9 @@ Normal 的模型与思考强度继续跟随 Pi 当前会话；Plan 和 Execution
 }
 ```
 
-会在首次启动时自动迁移为 version 2：原永久禁用项会从三个 Profile 的 allowlist 中移除。迁移后不再存在全局 denylist，也不再保存 session branch 的临时工具状态。
+会在首次启动时自动迁移为 version 2：原永久禁用项会从 Normal 与 Plan 两个 Profile 的 allowlist 中移除。迁移后不再存在全局 denylist，也不再保存 session branch 的临时工具状态。
 
-原 `claude-plan-mode.json` 中的 Plan/Execution 模型与思考强度会继续兼容；旧的 Plan tool 列表只用于首次生成 Plan 行默认值，之后工具矩阵以 `tools.json` 为唯一真相。项目级 Plan 配置不再覆盖这个全局矩阵。
+原 `claude-plan-mode.json` 中的 `execution` 模型与思考强度会自动作为新的 Normal 配置读取；旧的 Plan tool 列表只用于首次生成 Plan 行默认值，之后工具矩阵以 `tools.json` 为唯一真相。项目级 Plan 配置不再覆盖这个全局矩阵。
 
 查看运行时最终工具：
 
@@ -134,9 +132,8 @@ normal
   └─ EnterPlanMode / /plan
        └─ plan
             └─ ExitPlanMode + /plan-approve
-                 └─ execution
-                      └─ /plan finish
-                           └─ normal
+                 └─ normal（执行已批准计划）
+                      └─ /plan finish（仍保持 normal）
 ```
 
 `/plan config` 与 `/only-tools plan` 都直接打开同一个 Profile 矩阵，不再存在第二套 Plan 工具配置界面。

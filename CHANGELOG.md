@@ -3,10 +3,10 @@
 ## 0.5.0
 
 - Replace session/permanent tool states with one persistent profile × tool allowlist matrix.
-- Configure Normal, Plan, and Execution tool access side-by-side in one TUI.
-- Keep Plan/Execution model and thinking settings in the same matrix screen.
+- Configure Normal and Plan tool access side-by-side in one TUI; approved plans execute with Normal.
+- Configure Normal/Plan model and thinking settings in the same matrix screen; legacy execution settings migrate to Normal.
 - Migrate legacy permanentlyDisabledTools into profile omissions and stop applying a global denylist at runtime.
-- Make the Execution profile independent from Normal and hide Plan control tools outside their valid profile.
+- Remove the separate Execution profile; Plan approval returns directly to Normal for implementation.
 
 ## 0.4.2
 

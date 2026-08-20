@@ -23,11 +23,9 @@ assert.deepEqual(profiles.getUnavailableTools(["grep", "missing", "plan_write"])
   { name: "missing", reason: "not registered" },
 ]);
 
-profiles.activate("execution", ["shell_command", "apply_patch"]);
-assert.deepEqual(active, ["shell_command", "apply_patch"]);
 profiles.activate("normal");
 assert.deepEqual(active, ["shell_command"]);
 const snapshot = profiles.snapshot();
 assert.equal(snapshot.mode, "normal");
-assert.equal(Object.hasOwn(snapshot, "permanentlyDisabledTools"), false);
+assert.deepEqual(Object.keys(snapshot.requested), ["normal", "plan"]);
 console.log("tool profile controller tests passed");

@@ -5,7 +5,7 @@ function cloneConfig(config) {
     return {
         ...(config.tools !== undefined ? { tools: [...config.tools] } : {}),
         planning: { ...config.planning },
-        execution: { ...config.execution },
+        execution: { ...config.normal },
     };
 }
 function modelKey(model) {
@@ -128,8 +128,8 @@ async function editScopeConfig(pi, ctx, scope, filePath, current, inheritedTools
             `Allowed tools · ${formatTools(draft, scope)}`,
             `Plan model · ${formatModel(draft.planning)}`,
             `Plan thinking · ${draft.planning.thinkingLevel ?? "inherit"}`,
-            `Execute model · ${formatModel(draft.execution)}`,
-            `Execute thinking · ${draft.execution.thinkingLevel ?? "inherit"}`,
+            `Normal model · ${formatModel(draft.normal)}`,
+            `Normal thinking · ${draft.normal.thinkingLevel ?? "inherit"}`,
             "Show configuration JSON",
             "Reset this scope",
             "Save and close",
@@ -153,12 +153,12 @@ async function editScopeConfig(pi, ctx, scope, filePath, current, inheritedTools
             draft.planning = await selectThinkingLevel(ctx, "Select Plan thinking level", draft.planning);
             continue;
         }
-        if (choice.startsWith("Execute model")) {
-            draft.execution = await selectModel(ctx, "Select Execute model", draft.execution);
+        if (choice.startsWith("Normal model")) {
+            draft.normal = await selectModel(ctx, "Select Normal model", draft.normal);
             continue;
         }
-        if (choice.startsWith("Execute thinking")) {
-            draft.execution = await selectThinkingLevel(ctx, "Select Execute thinking level", draft.execution);
+        if (choice.startsWith("Normal thinking")) {
+            draft.normal = await selectThinkingLevel(ctx, "Select Normal thinking level", draft.normal);
             continue;
         }
         if (choice === "Show configuration JSON") {
@@ -201,7 +201,7 @@ function effectiveConfigText(config, allToolNames, globalPath, projectPath, tool
             effectiveTools,
             unavailableTools,
             planning: config.planning,
-            execution: config.execution,
+            execution: config.normal,
         }, null, 2),
     ].join("\n");
 }

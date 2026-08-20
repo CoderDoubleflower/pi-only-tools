@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const PROFILE_CONFIG_VERSION = 2;
-export const PROFILE_NAMES = Object.freeze(["normal", "plan", "execution"]);
+export const PROFILE_NAMES = Object.freeze(["normal", "plan"]);
 
 export function normalizeToolNames(values) {
   const result = [];
@@ -56,13 +56,17 @@ export async function loadProfileConfig(configPath, defaults = {}) {
     }
 
     if (parsed.version === PROFILE_CONFIG_VERSION && parsed.profiles && typeof parsed.profiles === "object") {
+      const hadExecutionProfile = Object.prototype.hasOwnProperty.call(parsed.profiles, "execution");
+      if (hadExecutionProfile) {
+        warnings.push(`${configPath}: removed legacy profiles.execution; approved plans now execute with the Normal profile.`);
+      }
       return {
         config: {
           version: PROFILE_CONFIG_VERSION,
           profiles: normalizeProfileObject(parsed.profiles, defaults, warnings, configPath),
         },
         warnings,
-        migrated: false,
+        migrated: hadExecutionProfile,
       };
     }
 

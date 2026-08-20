@@ -25,7 +25,6 @@ export class ToolProfileController {
     this.profiles = new Map([
       ["normal", initial],
       ["plan", []],
-      ["execution", []],
     ]);
   }
 
@@ -88,12 +87,10 @@ export class ToolProfileController {
       requested: {
         normal: this.getRequestedTools("normal"),
         plan: this.getRequestedTools("plan"),
-        execution: this.getRequestedTools("execution"),
       },
       effective: {
         normal: this.getEffectiveTools("normal"),
         plan: this.getEffectiveTools("plan"),
-        execution: this.getEffectiveTools("execution"),
       },
       activeTools: this.getEffectiveTools(),
     };
