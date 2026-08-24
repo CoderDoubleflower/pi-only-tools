@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix automatic Plan review dispatch so `agent_settled` routes through Pi's command pipeline and receives a command-capable context instead of calling `/plan-approve` with an event context.
 - Make a valid `plan_write` publish the exact revision directly to user review and terminate the planning turn.
 - Remove the model-facing `ExitPlanMode` tool; only an explicit user review action can enter execution.
 - Render `EnterPlanMode` and `plan_write` with Claude-style tool framing and Pi Markdown instead of one muted text block.

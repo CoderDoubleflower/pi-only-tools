@@ -205,7 +205,7 @@ export function createPlanToolUiExtensionApi(pi) {
   const rawSendUserMessage = pi.sendUserMessage?.bind(pi);
   const contextCache = new WeakMap();
   let exitPlanTool;
-  let reviewCommand;
+  let reviewCommandRegistered = false;
   let pendingPlanReview = false;
 
   function wrapContext(ctx) {
@@ -272,8 +272,8 @@ export function createPlanToolUiExtensionApi(pi) {
       if (!pendingPlanReview || ctx.hasPendingMessages?.()) return;
       pendingPlanReview = false;
       const wrappedCtx = wrapContext(ctx);
-      if (wrappedCtx.hasUI && reviewCommand) {
-        await reviewCommand("", wrappedCtx);
+      if (wrappedCtx.hasUI && reviewCommandRegistered && rawSendUserMessage) {
+        rawSendUserMessage("/plan-approve", { expandPromptTemplates: true });
       } else {
         wrappedCtx.ui?.notify(
           "Plan is ready. Run /plan-approve keep or /plan-approve clear.",
@@ -361,7 +361,7 @@ export function createPlanToolUiExtensionApi(pi) {
               return command.handler(args, wrapContext(ctx));
             },
           };
-          if (name === "plan-approve") reviewCommand = wrappedCommand.handler;
+          if (name === "plan-approve") reviewCommandRegistered = true;
           return registerCommand(name, wrappedCommand);
         };
       }
