@@ -1,34 +1,89 @@
 import assert from "node:assert/strict";
-import { PROFILE_NAMES } from "../src/profile-config.js";
-import { runtimeToolsForProfile, __test } from "../src/profile-matrix-ui.js";
+import { PROFILE_CONFIG_VERSION, PROFILE_NAMES } from "../src/profile-config.js";
+import {
+  runtimeToolsForProfile,
+  __test,
+} from "../src/profile-matrix-ui.js";
 
+assert.equal(PROFILE_CONFIG_VERSION, 3);
 assert.deepEqual(PROFILE_NAMES, ["normal", "plan"]);
 
-assert.deepEqual(__test.lockedCell("plan", "plan_write"), { locked: true, value: true, reason: "required" });
-assert.deepEqual(__test.lockedCell("normal", "plan_write"), { locked: true, value: false, reason: "control" });
-assert.deepEqual(runtimeToolsForProfile("plan", ["read", "EnterPlanMode"]), ["read", "plan_write", "ExitPlanMode"]);
-assert.deepEqual(runtimeToolsForProfile("normal", ["read", "EnterPlanMode", "plan_write"]), ["read", "EnterPlanMode"]);
+assert.deepEqual(__test.lockedCell("plan", "plan_write"), {
+  locked: true,
+  value: true,
+  reason: "required",
+});
+assert.deepEqual(__test.lockedCell("normal", "plan_write"), {
+  locked: true,
+  value: false,
+  reason: "control",
+});
+assert.deepEqual(__test.lockedCell("plan", "ExitPlanMode"), {
+  locked: true,
+  value: false,
+  reason: "control",
+});
+assert.deepEqual(
+  runtimeToolsForProfile("plan", ["read", "EnterPlanMode", "ExitPlanMode"]),
+  ["read", "plan_write"],
+);
+assert.deepEqual(
+  runtimeToolsForProfile("normal", [
+    "read",
+    "EnterPlanMode",
+    "plan_write",
+    "ExitPlanMode",
+  ]),
+  ["read", "EnterPlanMode"],
+);
+
+const rows = __test.toolRows(
+  {
+    getAllTools: () => [
+      { name: "read", sourceInfo: { source: "builtin" } },
+      { name: "grep", sourceInfo: { source: "builtin" } },
+      { name: "ExitPlanMode", sourceInfo: { source: "extension" } },
+      { name: "plan_write", sourceInfo: { source: "extension" } },
+    ],
+  },
+  {
+    version: 3,
+    profiles: {
+      normal: ["read", "ExitPlanMode"],
+      plan: ["grep", "ExitPlanMode"],
+    },
+  },
+);
+assert.equal(rows.some((tool) => tool.name === "ExitPlanMode"), false);
+assert.equal(rows.some((tool) => tool.name === "plan_write"), true);
+assert.equal(rows.some((tool) => tool.name === "EnterPlanMode"), true);
 
 const theme = {
-  fg(_color, text) { return String(text); },
-  bold(text) { return String(text); },
+  fg(_color, text) {
+    return String(text);
+  },
+  bold(text) {
+    return String(text);
+  },
 };
 const ansiTheme = {
   fg(color, text) {
     const code = color === "accent" ? 36 : color === "muted" ? 90 : 37;
     return `\u001b[${code}m${text}\u001b[39m`;
   },
-  bold(text) { return `\u001b[1m${text}\u001b[22m`; },
+  bold(text) {
+    return `\u001b[1m${text}\u001b[22m`;
+  },
 };
-const stripAnsi = (value) => String(value).replace(/\u001b\[[0-9;]*m/g, "");
+const stripAnsi = (value) =>
+  String(value).replace(/\u001b\[[0-9;]*m/g, "");
 const tools = [
   { name: "read", registered: true, builtin: true },
   { name: "grep", registered: true, builtin: true },
   { name: "plan_write", registered: true, builtin: false },
-  { name: "ExitPlanMode", registered: true, builtin: false },
 ];
 const config = {
-  version: 2,
+  version: 3,
   profiles: {
     normal: ["read"],
     plan: ["grep"],
@@ -36,10 +91,33 @@ const config = {
 };
 const defaults = structuredClone(config.profiles);
 const phaseProfiles = {
-  normal: { provider: "normal", model: "normal-model", thinkingLevel: "high" },
-  planning: { provider: "planner", model: "planner-model", thinkingLevel: "xhigh" },
+  normal: {
+    provider: "normal",
+    model: "normal-model",
+    thinkingLevel: "high",
+  },
+  planning: {
+    provider: "planner",
+    model: "planner-model",
+    thinkingLevel: "xhigh",
+  },
 };
 const doneResults = [];
+const copyText = {
+  title: "Only Tools",
+  subtitle: "",
+  model: "Model",
+  effort: "Effort",
+  modelCurrent: "Pi current",
+  effortCurrent: "Pi current",
+  selected: "Selected",
+  lockedRequired: "required",
+  lockedControl: "control",
+  unregistered: "unregistered",
+  editModel: "Enter: choose model",
+  editEffort: "Enter: choose effort",
+  help: "help",
+};
 const component = new __test.ProfileMatrixComponent({
   tui: { requestRender() {} },
   theme,
@@ -48,35 +126,27 @@ const component = new __test.ProfileMatrixComponent({
   defaults,
   tools,
   phaseProfiles,
-  copyText: {
-    title: "Only Tools",
-    subtitle: "Normal / Plan are columns; Model, Effort, and tools are rows.",
-    model: "Model",
-    effort: "Effort",
-    modelCurrent: "Pi current",
-    effortCurrent: "Pi current",
-    selected: "Selected",
-    lockedRequired: "required",
-    lockedControl: "control",
-    unregistered: "unregistered",
-    editModel: "Enter: choose model",
-    editEffort: "Enter: choose effort",
-    help: "help",
-  },
+  copyText,
 });
 
 const rendered = component.render(120);
-const header = rendered.find((line) => line.includes("NORMAL") && line.includes("PLAN"));
+const header = rendered.find(
+  (line) => line.includes("NORMAL") && line.includes("PLAN"),
+);
 assert.ok(header, "Normal and Plan must be column headers on the same line");
 assert.ok(rendered.some((line) => line.trimStart().startsWith("› Model")));
-assert.ok(rendered.some((line) => line.includes("Effort") && line.includes("high") && line.includes("xhigh")));
+assert.ok(
+  rendered.some(
+    (line) =>
+      line.includes("Effort") && line.includes("high") && line.includes("xhigh"),
+  ),
+);
 const readRow = rendered.find((line) => line.includes("read"));
 assert.ok(readRow?.includes("●"));
 assert.ok(readRow?.includes("○"));
-assert.equal(readRow?.includes("["), false, "tool toggles should not use small bracket markers");
+assert.equal(readRow?.includes("["), false);
+assert.equal(rendered.some((line) => line.includes("ExitPlanMode")), false);
 
-// ANSI styling must never change visible column positions. Reproduce the
-// reported bug by selecting Normal/read while Plan remains unselected.
 const ansiComponent = new __test.ProfileMatrixComponent({
   tui: { requestRender() {} },
   theme: ansiTheme,
@@ -85,44 +155,39 @@ const ansiComponent = new __test.ProfileMatrixComponent({
   defaults,
   tools,
   phaseProfiles,
-  copyText: {
-    title: "Only Tools",
-    subtitle: "",
-    model: "Model",
-    effort: "Effort",
-    modelCurrent: "Pi current",
-    effortCurrent: "Pi current",
-    selected: "Selected",
-    lockedRequired: "required",
-    lockedControl: "control",
-    unregistered: "unregistered",
-    editModel: "edit model",
-    editEffort: "edit effort",
-    help: "help",
-  },
+  copyText,
   initialRow: 2,
   initialCol: 0,
 });
 const ansiRendered = ansiComponent.render(120).map(stripAnsi);
-const ansiModelRow = ansiRendered.find((line) => line.includes("normal/normal-model") && line.includes("planner/planner-model"));
+const ansiModelRow = ansiRendered.find(
+  (line) =>
+    line.includes("normal/normal-model") && line.includes("planner/planner-model"),
+);
 const ansiReadRow = ansiRendered.find((line) => line.includes("read"));
 assert.ok(ansiModelRow && ansiReadRow);
 const planColumn = ansiModelRow.indexOf("planner/planner-model");
-assert.equal(ansiReadRow.lastIndexOf("○"), planColumn, "Plan tool glyph must stay aligned when the Normal cell is ANSI-styled");
+assert.equal(ansiReadRow.lastIndexOf("○"), planColumn);
 
-// Selected header/row/cell should receive accent styling.
 const ansiRaw = ansiComponent.render(120);
-assert.ok(ansiRaw.some((line) => line.includes("\u001b[36m") && stripAnsi(line).includes("NORMAL")));
-assert.ok(ansiRaw.some((line) => line.includes("\u001b[36m") && stripAnsi(line).includes("read")));
+assert.ok(
+  ansiRaw.some(
+    (line) => line.includes("\u001b[36m") && stripAnsi(line).includes("NORMAL"),
+  ),
+);
+assert.ok(
+  ansiRaw.some(
+    (line) => line.includes("\u001b[36m") && stripAnsi(line).includes("read"),
+  ),
+);
 
-// Left/right selects the profile column; up/down selects Model/Effort/tool rows.
-component.handleInput("\u001b[C"); // Plan
-component.handleInput("\u001b[B"); // Effort
-component.handleInput("\u001b[B"); // read
+component.handleInput("\u001b[C");
+component.handleInput("\u001b[B");
+component.handleInput("\u001b[B");
 assert.equal(component.currentProfile(), "plan");
 assert.equal(component.currentTool().name, "read");
 component.handleInput("\r");
-assert.ok(config.profiles.plan.includes("read"), "Enter on a tool row must toggle the selected profile/tool cell");
+assert.ok(config.profiles.plan.includes("read"));
 
 const modelComponent = new __test.ProfileMatrixComponent({
   tui: { requestRender() {} },
@@ -132,21 +197,7 @@ const modelComponent = new __test.ProfileMatrixComponent({
   defaults,
   tools,
   phaseProfiles,
-  copyText: {
-    title: "Only Tools",
-    subtitle: "",
-    model: "Model",
-    effort: "Effort",
-    modelCurrent: "Pi current",
-    effortCurrent: "Pi current",
-    selected: "Selected",
-    lockedRequired: "required",
-    lockedControl: "control",
-    unregistered: "unregistered",
-    editModel: "edit model",
-    editEffort: "edit effort",
-    help: "help",
-  },
+  copyText,
   initialCol: 1,
 });
 modelComponent.handleInput("\r");
@@ -158,4 +209,4 @@ assert.deepEqual(doneResults.at(-1), {
   col: 1,
 });
 
-console.log("profile matrix rules tests passed");
+console.log("profile matrix user-controlled Plan rules tests passed");

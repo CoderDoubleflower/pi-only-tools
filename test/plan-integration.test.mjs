@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = await mkdtemp(join(tmpdir(), "pi-only-tools-plan-"));
+const root = await mkdtemp(join(tmpdir(), "pi-only-tools-plan-v2-"));
 const agentDir = join(root, "agent");
 await mkdir(agentDir, { recursive: true });
 process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -18,6 +18,8 @@ const entries = [];
 const notifications = [];
 const sentMessages = [];
 const terminalInputHandlers = new Set();
+const reviewChoices = ["Keep reviewing for now"];
+const reviewPrompts = [];
 const registered = new Set([
   "shell_command",
   "apply_patch",
@@ -25,7 +27,6 @@ const registered = new Set([
   "grep",
   "find",
   "ls",
-  "web_search",
   "ask_user_question",
 ]);
 let activeTools = ["shell_command", "apply_patch"];
@@ -64,7 +65,10 @@ const ctx = {
   newSession: async () => ({ cancelled: true }),
   ui: {
     theme: { fg: (_color, text) => text },
-    select: async () => undefined,
+    async select(title, choices) {
+      reviewPrompts.push({ title, choices });
+      return reviewChoices.shift();
+    },
     confirm: async () => true,
     editor: async () => undefined,
     notify: (message, type = "info") => notifications.push({ message, type }),
@@ -109,7 +113,7 @@ const pi = {
 await writeFile(
   join(agentDir, "claude-plan-mode.json"),
   JSON.stringify({
-    tools: ["read", "web_search", "ask_user_question"],
+    tools: ["read", "ask_user_question", "ExitPlanMode"],
     planning: { provider: "planner", model: "planner-model", thinkingLevel: "high" },
     normal: { provider: "normal", model: "normal-model", thinkingLevel: "xhigh" },
   }),
@@ -117,17 +121,12 @@ await writeFile(
 
 const profiles = createToolProfileController(pi);
 const plan = registerClaudePlanMode(pi, { toolProfiles: profiles });
-// The integrated extension loads the persistent profile matrix before the Plan
-// session_start hook runs. Mirror that lifecycle here instead of the removed
-// session/permanent denylist model.
 profiles.setProfile("normal", ["shell_command", "apply_patch", "EnterPlanMode"], { apply: false });
-profiles.setProfile(
-  "plan",
-  ["read", "ask_user_question", "plan_write", "ExitPlanMode"],
-  { apply: false },
-);
+profiles.setProfile("plan", ["read", "ask_user_question", "plan_write", "ExitPlanMode"], { apply: false });
 profiles.activate("normal");
 assert.equal(plan.enabled, true);
+assert.deepEqual([...tools.keys()].sort(), ["EnterPlanMode", "plan_write"].sort());
+assert.equal(tools.has("ExitPlanMode"), false, "ExitPlanMode must not be registered for the model");
 
 async function emit(event, payload = {}) {
   let result;
@@ -139,53 +138,107 @@ async function emit(event, payload = {}) {
 }
 
 await emit("session_start", { reason: "startup" });
-assert.equal(terminalInputHandlers.size, 1, "Plan Mode must install one Shift+Tab terminal listener");
+assert.equal(terminalInputHandlers.size, 1);
 const terminalInputHandler = [...terminalInputHandlers][0];
-assert.equal(terminalInputHandler("x"), undefined);
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
 for (let i = 0; i < 50 && profiles.mode !== "plan"; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
-assert.equal(profiles.mode, "plan", "Shift+Tab must enter Plan Mode");
+assert.equal(profiles.mode, "plan");
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
 for (let i = 0; i < 50 && profiles.mode !== "normal"; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
-assert.equal(profiles.mode, "normal", "Shift+Tab must exit Plan Mode back to Normal");
+assert.equal(profiles.mode, "normal");
 
-await commands.get("plan").handler("on Inspect the repository", ctx);
+await commands.get("plan").handler("on Inspect the review workflow", ctx);
 assert.equal(profiles.mode, "plan");
-assert.deepEqual(activeTools, ["read", "plan_write", "ExitPlanMode", "ask_user_question"]);
+assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
 assert.equal(ctx.model.provider, "planner");
 assert.equal(thinkingLevel, "high");
 
 let promptResult = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(promptResult.systemPrompt, /configured Plan tool allowlist is:/);
-assert.match(promptResult.systemPrompt, /read/);
-assert.match(promptResult.systemPrompt, /ask_user_question/);
-assert.doesNotMatch(promptResult.systemPrompt, /configured Plan tool allowlist is:[^\n]*web_search/);
+assert.match(promptResult.systemPrompt, /Repository reconnaissance/);
+assert.match(promptResult.systemPrompt, /Current State/);
+assert.doesNotMatch(promptResult.systemPrompt, /ExitPlanMode/);
+assert.match(promptResult.systemPrompt, /do not call any exit/i);
 
-profiles.setProfile("normal", ["shell_command"]);
-assert.deepEqual(activeTools, ["read", "plan_write", "ExitPlanMode", "ask_user_question"]);
-profiles.setProfile("plan", ["ask_user_question", "plan_write", "ExitPlanMode"]);
-assert.deepEqual(new Set(activeTools), new Set(["plan_write", "ExitPlanMode", "ask_user_question"]));
-promptResult = await emit("before_agent_start", { systemPrompt: "base" });
-assert.doesNotMatch(promptResult.systemPrompt, /configured Plan tool allowlist is:[^\n]*read/);
+const invalidResult = await tools.get("plan_write").execute(
+  "invalid",
+  { content: "# Too short\n\n## Context\nMissing the required verified structure.\n", expected_revision: 1 },
+  undefined,
+  undefined,
+  ctx,
+);
+assert.equal(invalidResult.terminate, undefined);
+assert.match(invalidResult.content[0].text, /not ready for review/);
+assert.equal(plan.getStage(), "planning");
 
-const validPlan = "# Implementation Plan\n\n## Context\nReplace the printer bitmap rendering path while preserving behavior.\n\n## Implementation Steps\n1. `src/index.js`\n   - Reuse the existing profile controller and update the concrete integration path.\n\n## Verification\n- `npm test`\n- Confirm the end-to-end Plan handoff.\n";
-await tools.get("plan_write").execute("write", { content: validPlan, expected_revision: 1 }, undefined, undefined, ctx);
-await tools.get("ExitPlanMode").execute("exit", {}, undefined, undefined, ctx);
+const validPlan = `# Make Plan approval user-controlled
+
+## Context
+The current workflow exposes a model-callable exit action and repeats the same plan during approval. The change must publish one reviewable revision, preserve the existing revision/hash snapshot, and transition to implementation only after an explicit user choice.
+
+## Current State
+- \`src/plan/index.js\`: \`registerClaudePlanMode\` owns planning state, publication, the review command, and execution handoff.
+- \`src/plan/tool-set.js\`: \`buildPlanningTools\` determines the model-visible planning allowlist.
+- \`src/plan-tool-ui.js\`: the current renderer receives the complete plan in the call arguments and can render it without duplicating model-visible output.
+
+## Implementation Steps
+1. **Publish directly from plan_write**
+   - Files: \`src/plan/index.js\`, \`src/plan/tool-set.js\`
+   - Change: validate the complete document, create the ready snapshot, terminate the planning turn, and exclude the legacy exit action from registered and active tools.
+   - Reuse: \`isPlanReady\` from \`src/plan/plan-store.js\` and \`approvePlan\` from \`src/plan/handoff.js\`.
+   - Flow: planning moves to ready after publication; only the user review command can move ready to executing.
+2. **Render the plan exactly once**
+   - Files: \`src/plan-tool-ui.js\`, \`src/claude-tool-ui.js\`
+   - Change: use the shared call/result layout and render the Markdown body with semantic styles rather than one muted color.
+   - Dependencies: state metadata must be finalized before rendering the result status.
+
+## Risks and Compatibility
+- Existing profile files can contain the removed control tool, so loaders must filter it and persist a migrated configuration version.
+
+## Verification
+- Automated: \`npm test\`
+- Integration: confirm planning → ready occurs after a valid plan_write and ready → executing occurs only after the user chooses execution.
+- Manual/TUI: confirm one readable plan is shown with no visible or model-callable exit action.
+`;
+
+const validResult = await tools.get("plan_write").execute(
+  "valid",
+  { content: validPlan, expected_revision: 2 },
+  undefined,
+  undefined,
+  ctx,
+);
+assert.equal(validResult.terminate, true);
+assert.equal(validResult.details.readiness.ready, true);
+assert.doesNotMatch(validResult.content[0].text, /# Make Plan approval/);
 assert.equal(entries.filter((entry) => entry.customType === PLAN_STATE_ENTRY).at(-1).data.stage, "ready");
 assert.equal(profiles.mode, "plan");
+assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
+
+await emit("agent_settled");
+assert.equal(reviewPrompts.length, 1, "a valid plan_write must open the user review menu after rendering");
+assert.ok(reviewPrompts[0].choices.includes("Execute plan (keep context)"));
+assert.equal(plan.getStage(), "ready", "dismissing execution must keep the published revision ready");
+
+const blockedExit = await emit("tool_call", { toolName: "ExitPlanMode" });
+assert.equal(blockedExit.block, true);
+assert.match(blockedExit.reason, /user-controlled/);
 
 await commands.get("plan-approve").handler("keep", ctx);
+assert.equal(plan.getStage(), "executing");
 assert.equal(profiles.mode, "normal");
-assert.deepEqual(activeTools, ["shell_command"]);
+assert.deepEqual(activeTools, ["shell_command", "apply_patch", "EnterPlanMode"]);
 assert.equal(ctx.model.provider, "normal");
 assert.equal(thinkingLevel, "xhigh");
-assert.ok(sentMessages.some((entry) => entry.message?.customType));
+const handoff = sentMessages.find((entry) => entry.message?.customType === "claude-plan-mode-handoff");
+assert.ok(handoff);
+assert.equal(handoff.message.display, false, "approved-plan handoff must stay model-visible but hidden from the transcript");
+assert.match(handoff.message.content, /<approved-plan/);
 
 await commands.get("plan").handler("finish", ctx);
+assert.equal(plan.getStage(), "idle");
 assert.equal(profiles.mode, "normal");
-assert.ok(activeTools.includes("shell_command"));
 
 await emit("session_shutdown");
-assert.equal(terminalInputHandlers.size, 0, "Shift+Tab listener must be removed on session shutdown");
+assert.equal(terminalInputHandlers.size, 0);
 await rm(root, { recursive: true, force: true });
-console.log("integrated Plan profile tests passed");
+console.log("user-controlled Plan workflow integration tests passed");

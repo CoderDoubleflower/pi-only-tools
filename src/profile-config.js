@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { LEGACY_EXIT_PLAN_MODE_TOOL } from "./plan/constants.js";
 
-export const PROFILE_CONFIG_VERSION = 2;
+export const PROFILE_CONFIG_VERSION = 3;
 export const PROFILE_NAMES = Object.freeze(["normal", "plan"]);
 
 export function normalizeToolNames(values) {
@@ -11,7 +12,7 @@ export function normalizeToolNames(values) {
   for (const value of values ?? []) {
     if (typeof value !== "string") continue;
     const name = value.trim();
-    if (!name || seen.has(name)) continue;
+    if (!name || name === LEGACY_EXIT_PLAN_MODE_TOOL || seen.has(name)) continue;
     seen.add(name);
     result.push(name);
   }
@@ -19,7 +20,9 @@ export function normalizeToolNames(values) {
 }
 
 function cloneProfiles(profiles) {
-  return Object.fromEntries(PROFILE_NAMES.map((name) => [name, [...(profiles?.[name] ?? [])]]));
+  return Object.fromEntries(
+    PROFILE_NAMES.map((name) => [name, normalizeToolNames(profiles?.[name])]),
+  );
 }
 
 export function createProfileConfig(defaults = {}) {
@@ -42,7 +45,13 @@ function normalizeProfileObject(value, defaults, warnings, source) {
       profiles[profile] = normalizeToolNames(defaults?.[profile]);
       continue;
     }
-    profiles[profile] = normalizeToolNames(raw);
+    const normalized = normalizeToolNames(raw);
+    if (raw.includes(LEGACY_EXIT_PLAN_MODE_TOOL)) {
+      warnings.push(
+        `${source}: removed legacy ${LEGACY_EXIT_PLAN_MODE_TOOL}; plan approval is now user-controlled.`,
+      );
+    }
+    profiles[profile] = normalized;
   }
   return profiles;
 }
@@ -55,30 +64,61 @@ export async function loadProfileConfig(configPath, defaults = {}) {
       throw new Error("config root must be an object");
     }
 
-    if (parsed.version === PROFILE_CONFIG_VERSION && parsed.profiles && typeof parsed.profiles === "object") {
-      const hadExecutionProfile = Object.prototype.hasOwnProperty.call(parsed.profiles, "execution");
+    if (
+      [2, PROFILE_CONFIG_VERSION].includes(parsed.version) &&
+      parsed.profiles &&
+      typeof parsed.profiles === "object"
+    ) {
+      const hadExecutionProfile = Object.prototype.hasOwnProperty.call(
+        parsed.profiles,
+        "execution",
+      );
+      const hadLegacyExit = PROFILE_NAMES.some((profile) =>
+        Array.isArray(parsed.profiles[profile])
+          ? parsed.profiles[profile].includes(LEGACY_EXIT_PLAN_MODE_TOOL)
+          : false,
+      );
       if (hadExecutionProfile) {
-        warnings.push(`${configPath}: removed legacy profiles.execution; approved plans now execute with the Normal profile.`);
+        warnings.push(
+          `${configPath}: removed legacy profiles.execution; approved plans execute with the Normal profile.`,
+        );
+      }
+      if (parsed.version === 2) {
+        warnings.push(
+          `${configPath}: migrated profile config from version 2 to ${PROFILE_CONFIG_VERSION}.`,
+        );
       }
       return {
         config: {
           version: PROFILE_CONFIG_VERSION,
-          profiles: normalizeProfileObject(parsed.profiles, defaults, warnings, configPath),
+          profiles: normalizeProfileObject(
+            parsed.profiles,
+            defaults,
+            warnings,
+            configPath,
+          ),
         },
         warnings,
-        migrated: hadExecutionProfile,
+        migrated:
+          parsed.version !== PROFILE_CONFIG_VERSION ||
+          hadExecutionProfile ||
+          hadLegacyExit,
       };
     }
 
-    // Legacy v1 stored one global denylist. Convert it once into omissions from
-    // every profile; after migration there is no separate permanent/session state.
-    const legacyDisabled = new Set(normalizeToolNames(parsed.permanentlyDisabledTools));
+    const legacyDisabled = new Set(
+      normalizeToolNames(parsed.permanentlyDisabledTools),
+    );
     const migratedProfiles = {};
     for (const profile of PROFILE_NAMES) {
-      migratedProfiles[profile] = normalizeToolNames(defaults?.[profile]).filter((name) => !legacyDisabled.has(name));
+      migratedProfiles[profile] = normalizeToolNames(defaults?.[profile]).filter(
+        (name) => !legacyDisabled.has(name),
+      );
     }
     if (legacyDisabled.size > 0 || parsed.version === 1) {
-      warnings.push(`${configPath}: migrated legacy permanentlyDisabledTools into profile allowlists.`);
+      warnings.push(
+        `${configPath}: migrated legacy permanentlyDisabledTools into profile allowlists.`,
+      );
     }
     return {
       config: createProfileConfig(migratedProfiles),
@@ -89,7 +129,11 @@ export async function loadProfileConfig(configPath, defaults = {}) {
     if (error && typeof error === "object" && error.code === "ENOENT") {
       return { config: createProfileConfig(defaults), warnings, migrated: true };
     }
-    warnings.push(`${configPath}: unable to read profile config: ${error instanceof Error ? error.message : String(error)}`);
+    warnings.push(
+      `${configPath}: unable to read profile config: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
     return { config: createProfileConfig(defaults), warnings, migrated: true };
   }
 }

@@ -6,11 +6,24 @@ import path from "node:path";
 import plugin from "../src/entry.js";
 import { wrapPlanToolDefinition } from "../src/plan-tool-ui.js";
 
-const planTheme = { fg: (_color, text) => text };
-for (const toolName of ["EnterPlanMode", "plan_write", "ExitPlanMode"]) {
+const stripAnsi = (value) => String(value).replace(/\u001b\[[0-9;]*m/g, "");
+const planTheme = {
+  fg: (_color, text) => String(text),
+  bold: (text) => String(text),
+};
+for (const toolName of ["EnterPlanMode", "plan_write"]) {
   const wrapped = wrapPlanToolDefinition({ name: toolName });
-  assert.equal(wrapped.renderShell, "self", `${toolName} must opt out of Pi's padded default tool shell`);
+  assert.equal(
+    wrapped.renderShell,
+    "self",
+    `${toolName} must opt out of Pi's padded default tool shell`,
+  );
 }
+assert.equal(
+  wrapPlanToolDefinition({ name: "ExitPlanMode" }).renderShell,
+  undefined,
+  "ExitPlanMode is not a model-facing or rendered tool",
+);
 
 const planWrite = wrapPlanToolDefinition({ name: "plan_write" });
 const renderedPlan = planWrite
@@ -19,25 +32,36 @@ const renderedPlan = planWrite
       content: [
         {
           type: "text",
-          text: "Canonical plan updated to revision 2.\nPath: /tmp/plan.md\nSHA-256: abc123",
+          text: "Plan revision 2 is saved and awaiting user review.",
         },
       ],
-      details: {},
+      details: {
+        plan: { revision: 2 },
+        ready: { revision: 2 },
+        readiness: { ready: true },
+      },
     },
     { expanded: false, isPartial: false },
     planTheme,
     {
       args: {
         content:
-          "# Implementation Plan\n\n## Context\nKeep the Plan UI readable.\n\n## Implementation Steps\n1. Render the plan.\n\n## Verification\n- Run tests.\n",
+          "# Readable Plan UI\n\n## Context\nKeep the Plan UI readable without repeating the approved revision.\n\n## Current State\n- `src/plan-tool-ui.js` owns visible Plan rendering.\n\n## Implementation Steps\n1. **Render the plan once**\n   - Files: `src/plan-tool-ui.js`\n   - Change: render the complete document with Pi Markdown.\n   - Reuse: the shared Claude tool shell and runtime Markdown theme.\n   - Flow: `plan_write` publishes the only visible copy.\n\n## Verification\n- Automated: `npm test`\n- TUI: confirm the plan is readable and appears once.\n",
       },
     },
   )
   .render(400)
   .join("\n");
-assert.match(renderedPlan, /Canonical plan updated to revision 2/);
-assert.match(renderedPlan, /# Implementation Plan/);
-assert.match(renderedPlan, /## Verification/);
+const renderedPlanText = stripAnsi(renderedPlan);
+assert.match(renderedPlanText, /Plan r2 saved/);
+assert.match(renderedPlanText, /Readable Plan UI/);
+assert.match(renderedPlanText, /Current State/);
+assert.match(renderedPlanText, /src\/plan-tool-ui\.js/);
+assert.equal(
+  renderedPlan.includes("<toolOutput># Readable Plan UI"),
+  false,
+  "the complete Markdown document must not be wrapped in one toolOutput color",
+);
 
 const tools = new Map();
 plugin({
@@ -100,9 +124,18 @@ for (const name of loadingActions) {
   };
 }
 assert.doesNotThrow(() => plugin(loadOnlyApi));
-for (const toolName of ["EnterPlanMode", "plan_write", "ExitPlanMode"]) {
-  assert.equal(loadOnlyTools.get(toolName).renderShell, "self", `${toolName} must be decorated through src/entry.js`);
+for (const toolName of ["EnterPlanMode", "plan_write"]) {
+  assert.equal(
+    loadOnlyTools.get(toolName).renderShell,
+    "self",
+    `${toolName} must be decorated through src/entry.js`,
+  );
 }
+assert.equal(
+  loadOnlyTools.has("ExitPlanMode"),
+  false,
+  "ExitPlanMode must not be registered for the model",
+);
 assert.equal(typeof loadOnlyTools.get("plan_write").renderResult, "function");
 
 console.log("runtime entry registration test passed");
