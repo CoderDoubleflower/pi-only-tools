@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Make a valid `plan_write` publish the exact revision directly to user review and terminate the planning turn.
+- Remove the model-facing `ExitPlanMode` tool; only an explicit user review action can enter execution.
+- Render `EnterPlanMode` and `plan_write` with Claude-style tool framing and Pi Markdown instead of one muted text block.
+- Keep approved-plan handoff messages hidden from the transcript so a revision is displayed only once.
+- Upgrade profile configuration to version 3 and remove legacy `ExitPlanMode` entries from persisted Normal/Plan profiles.
+- Strengthen the planning prompt and canonical template with verified current state, concrete implementation flow, compatibility risks, and repository-supported verification.
+
 ## 0.5.3
 
 - Fix Profile matrix column drift when the selected cell contains ANSI styling by padding plain text before applying color/bold.
@@ -50,4 +59,3 @@
 - Preserve legacy claude-plan-mode.json configuration and Plan session state.
 - Apply permanent disables consistently without allowing pi-only-tools to overwrite Plan tools.
 - Report requested, effective, unregistered, and permanently disabled Plan tools.
-

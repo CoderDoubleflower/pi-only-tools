@@ -1,13 +1,13 @@
 # pi-only-tools
 
-一个面向 Pi coding agent 的统一工具策略 package：既提供 Codex 风格基础工具，也统一管理 Normal 与 Plan 两个工具 Profile。Plan 批准后直接回到 Normal 执行。
+一个面向 Pi coding agent 的统一工具策略 package：既提供 Codex 风格基础工具，也统一管理 Normal 与 Plan 两个工具 Profile。有效的计划由 `plan_write` 直接发布给用户审核，只有用户选择执行后才切回 Normal 开始实现。
 
 - `shell_command`
 - `apply_patch`
 
 两个工具使用紧凑的终端渲染：调用行显示为 `Bash(...)` / `Update(...)`，结果使用 `⎿` 前缀，长输出默认折叠，文件修改显示增删行统计和带行号的 diff。
 
-从 **0.5.0** 开始，Normal 与 Plan 两个 Profile 在同一张工具矩阵中持久配置；Plan 批准后直接切回 Normal 执行，不存在独立 Execution Profile。
+从 **0.5.0** 开始，Normal 与 Plan 两个 Profile 在同一张工具矩阵中持久配置；计划获用户批准后直接切回 Normal 执行，不存在独立 Execution Profile。
 
 ## 要求
 
@@ -113,9 +113,9 @@ Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后
 ### Profile 语义
 
 - `normal`：普通会话以及批准计划后的执行阶段共同使用的持久工具 allowlist、模型和思考强度。
-- `plan`：Plan Mode 的持久工具 allowlist；`plan_write` 与 `ExitPlanMode` 在表格中锁定为必选。
+- `plan`：Plan Mode 的持久调查工具 allowlist；`plan_write` 在表格中锁定为必选。
 
-`EnterPlanMode` 只允许出现在 Normal；`plan_write` / `ExitPlanMode` 只允许出现在 Plan。控制工具在不合法的 Profile 中显示为锁定关闭。
+`EnterPlanMode` 只允许出现在 Normal；`plan_write` 只允许出现在 Plan。`ExitPlanMode` 不再注册或暴露给模型，旧配置中的同名项会在加载和迁移时清理。控制工具在不合法的 Profile 中显示为锁定关闭。
 
 配置保存后立即更新当前 active profile，同时把 Normal 中启用的 Pi 内置工具同步到官方 `settings.json.defaultTools`，使下次启动的内置工具状态与矩阵一致。
 
@@ -130,7 +130,7 @@ Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后
 }
 ```
 
-会在首次启动时自动迁移为 version 2：原永久禁用项会从 Normal 与 Plan 两个 Profile 的 allowlist 中移除。迁移后不再存在全局 denylist，也不再保存 session branch 的临时工具状态。
+会在首次启动时自动迁移为 version 3：原永久禁用项会从 Normal 与 Plan 两个 Profile 的 allowlist 中移除，同时清理旧版 `ExitPlanMode` 配置。迁移后不再存在全局 denylist，也不再保存 session branch 的临时工具状态。
 
 原 `claude-plan-mode.json` 中的 `execution` 模型与思考强度会自动作为新的 Normal 配置读取；旧的 Plan tool 列表只用于首次生成 Plan 行默认值，之后工具矩阵以 `tools.json` 为唯一真相。项目级 Plan 配置不再覆盖这个全局矩阵。
 
@@ -146,9 +146,37 @@ Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后
 normal
   └─ EnterPlanMode / /plan
        └─ plan
-            └─ ExitPlanMode + /plan-approve
-                 └─ normal（执行已批准计划）
-                      └─ /plan finish（仍保持 normal）
+            └─ valid plan_write
+                 └─ ready（用户审核）
+                      ├─ 执行计划（保留上下文） → normal / executing
+                      ├─ 新会话执行             → normal / executing
+                      ├─ 编辑 / 反馈             → plan
+                      └─ 稍后处理                → ready
+                           └─ /plan-approve
+```
+
+有效的 `plan_write` 会完成以下动作：
+
+1. 原子写入完整 canonical plan，并固定 revision 与 SHA-256；
+2. 通过结构和占位符检查后进入 `ready`；
+3. 在当前工具结果中用 Pi Markdown 渲染计划正文；
+4. 终止本轮 planning turn，并打开用户审核菜单。
+
+计划正文只在 `plan_write` 阶段完整显示一次。用户批准属于内部状态动作，不会形成可见工具调用；执行 handoff 对模型可见，但在 TUI transcript 中隐藏，因此不会重复打印计划。
+
+交互菜单提供：
+
+- 在当前上下文执行；
+- 清空上下文并在新会话执行；
+- 编辑计划；
+- 提供反馈并继续规划；
+- 稍后审核。
+
+非交互模式可以使用：
+
+```text
+/plan-approve keep
+/plan-approve clear
 ```
 
 `/plan config` 与 `/only-tools plan` 都直接打开同一个 Profile 矩阵，不再存在第二套 Plan 工具配置界面。
@@ -246,6 +274,18 @@ Update(src/index.ts)
        10 +const enabled = true;
 ```
 
+计划：
+
+```text
+Write Plan(User-controlled Plan review)
+  ⎿  Plan r3 saved · 4 steps · awaiting your review
+
+     # User-controlled Plan review
+     ...
+```
+
+计划正文由 Pi Markdown 渲染，不会把整个文档套成灰色 `toolOutput`；标题、列表、行内代码和代码块使用对应的语义样式。
+
 折叠输出：
 
 ```text
@@ -276,8 +316,8 @@ Pi 的全局工具展开快捷键仍负责展开当前保留的 TUI 预览；超
 
 1. Pi 按自己的 `defaultTools`、项目设置和 CLI 参数决定初始工具集。
 2. `shell_command` 与 `apply_patch` 按普通 extension tool 注册。
-3. 使用 `/only-tools` 统一管理会话状态、永久禁用和 Pi 官方全局 `defaultTools`。
-4. 需要恢复 0.1.0 的近似效果时，在界面中选择“禁用全部内置工具”；其他扩展工具仍按 Pi 的正常规则保留。
+3. 使用 `/only-tools` 统一管理 Normal / Plan 的持久工具矩阵。
+4. 需要恢复 0.1.0 的近似效果时，在 Normal 列中禁用不需要的内置工具；其他扩展工具仍按 Pi 的正常规则保留。
 
 旧版没有创建工具选择配置文件；早期 0.2.0 开发包若产生了 `~/.pi/agent/pi-only-tools.json`，新版不会再读取它，可以安全删除。
 
