@@ -12,6 +12,7 @@ process.env.LANG = "en_US.UTF-8";
 const { initTheme } = await import("@earendil-works/pi-coding-agent");
 initTheme("dark", false);
 const { default: plugin, __test } = await import("../src/index.js");
+const { PROFILE_CONFIG_VERSION } = await import("../src/profile-config.js");
 
 const tools = new Map();
 const handlers = new Map();
@@ -143,7 +144,7 @@ const eventContext = {
 };
 await handlers.get("session_start")[0]({}, eventContext);
 let migratedProfileConfig = JSON.parse(await readFile(toolsConfigPath, "utf8"));
-assert.equal(migratedProfileConfig.version, 2);
+assert.equal(migratedProfileConfig.version, PROFILE_CONFIG_VERSION);
 assert.ok(Array.isArray(migratedProfileConfig.profiles.normal));
 assert.ok(Array.isArray(migratedProfileConfig.profiles.plan));
 assert.equal(migratedProfileConfig.profiles.normal.includes("custom_extra"), false);

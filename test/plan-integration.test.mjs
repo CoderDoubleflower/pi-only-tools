@@ -17,6 +17,7 @@ const tools = new Map();
 const entries = [];
 const notifications = [];
 const sentMessages = [];
+const pendingDispatches = [];
 const terminalInputHandlers = new Set();
 const reviewChoices = ["Keep reviewing for now"];
 const reviewPrompts = [];
@@ -102,7 +103,16 @@ const pi = {
   setActiveTools: (names) => { activeTools = [...names]; },
   appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
   sendMessage(message, options) { sentMessages.push({ message, options }); },
-  sendUserMessage(content, options) { sentMessages.push({ user: content, options }); },
+  sendUserMessage(content, options) {
+  sentMessages.push({ user: content, options });
+  if (options?.expandPromptTemplates !== true || typeof content !== "string" || !content.startsWith("/")) return;
+  const [commandName, ...rest] = content.slice(1).split(/\s+/);
+  const command = commands.get(commandName);
+  if (!command) throw new Error(`Unknown dispatched command: ${commandName}`);
+  pendingDispatches.push(
+    Promise.resolve().then(() => command.handler(rest.join(" "), ctx)),
+  );
+},
   setSessionName(name) { sessionName = name; },
   getSessionName: () => sessionName,
   async setModel(model) { ctx.model = model; return true; },
@@ -215,6 +225,7 @@ assert.equal(profiles.mode, "plan");
 assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
 
 await emit("agent_settled");
+await Promise.all(pendingDispatches);
 assert.equal(reviewPrompts.length, 1, "a valid plan_write must open the user review menu after rendering");
 assert.ok(reviewPrompts[0].choices.includes("Execute plan (keep context)"));
 assert.equal(plan.getStage(), "ready", "dismissing execution must keep the published revision ready");
