@@ -69,13 +69,20 @@ Planning process:
 ### Phase 4: Publish the complete plan
 Replace the initial template completely with ${PLAN_WRITE_TOOL}. Pass the full Markdown document, never a patch or fragment.
 
-The final plan must use this structure:
+Visible-language contract:
+- Write the H1 title, every H2/H3 heading, step title, prose paragraph, and descriptive list label in the language used by the user's current request.
+- If the conversation contains multiple languages, follow the language explicitly requested by the user; otherwise follow the dominant language of the latest task.
+- Do not retain English template headings when the user is communicating in another language.
+- Keep code identifiers, file paths, commands, API names, and quoted repository symbols unchanged.
+
+The final plan must use this semantic structure and order:
 - A single outcome-oriented H1 title.
-- A required \`## Context\` section with one concise paragraph describing the problem, constraints, and intended outcome.
-- A required \`## Current State\` section naming the relevant existing files and symbols and explaining the verified current control/data flow and the concrete gap.
-- A required \`## Implementation Steps\` section with ordered numbered steps. Each step must have a meaningful title and identify exact file paths, the concrete change, existing functions/types/components to reuse, the resulting flow, and sequencing dependencies when relevant.
-- An optional \`## Risks and Compatibility\` section only when there are real migration, recovery, concurrency, compatibility, or rollback concerns.
-- A required \`## Verification\` section containing repository-supported commands plus integration or manual behaviors that prove the change works.
+- First, a required H2 section that concisely describes the problem, constraints, and intended outcome.
+- Second, a required H2 section covering the verified Current State: name the relevant existing files and symbols, explain the current control/data flow, and identify the concrete gap. Localize the visible heading instead of using this English semantic label.
+- Third, a required H2 section containing ordered numbered implementation steps. Each step must have a meaningful title and identify exact file paths, the concrete change, existing functions/types/components to reuse, the resulting flow, and sequencing dependencies when relevant.
+- Optionally, one H2 section for real migration, recovery, concurrency, compatibility, or rollback concerns.
+- Last, a required H2 section containing repository-supported commands plus integration or manual behaviors that prove the change works.
+- Use exactly four required H2 sections, or five when the optional risks/compatibility section is necessary. Put any additional subdivisions under H3 headings or lists, not extra H2 headings, so the language-independent structure remains machine-verifiable.
 
 Final-plan quality rules:
 - Include only the recommended approach.

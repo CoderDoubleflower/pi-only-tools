@@ -7,7 +7,7 @@ import {
   RESPONSE_PREFIX,
   responseLinesComponent,
 } from "./claude-tool-ui.js";
-import { isPlanReady } from "./plan/plan-store.js";
+import { countPlanSteps, isPlanReady } from "./plan/plan-store.js";
 import {
   LEGACY_EXIT_PLAN_MODE_TOOL,
   PLAN_HANDOFF_MESSAGE,
@@ -15,6 +15,17 @@ import {
 
 const PLAN_API_MARKER = Symbol.for("pi-only-tools.user-controlled-plan-api");
 const PLAN_UI_TOOL_NAMES = new Set(["EnterPlanMode", "plan_write"]);
+const PLAN_WRITE_DESCRIPTION =
+  "Replace the complete canonical Plan Mode Markdown document. Keep the required semantic H2 order, write every visible heading and explanation in the user's language, and present only the recommended implementation.";
+const PLAN_WRITE_PROMPT_GUIDELINES = Object.freeze([
+  "Use plan_write only in Plan Mode and pass the complete plan, not a patch or fragment.",
+  "Write every visible plan heading, step title, list label, and explanation in the language used by the user's current request; keep repository identifiers, paths, and commands unchanged.",
+  "Use exactly four required H2 sections in this semantic order: context, current state, numbered implementation steps, and verification. Insert one optional risks/compatibility H2 section before verification only when needed.",
+  "Use H3 headings or lists for additional subdivisions instead of adding more H2 sections.",
+  "Name exact file paths and existing functions, types, or utilities to reuse in the ordered implementation steps.",
+  "Include only the recommended approach; remove alternatives, unresolved options, raw exploration notes, and all template placeholders.",
+  "Keep the plan concise enough to scan and detailed enough to implement without rediscovering the design.",
+]);
 
 function textResult(result) {
   return (result?.content ?? [])
@@ -26,13 +37,11 @@ function textResult(result) {
 
 function firstHeading(content) {
   const match = String(content ?? "").match(/^#\s+(.+?)\s*$/m);
-  return match?.[1]?.trim() || "implementation plan";
+  return match?.[1]?.trim() || "…";
 }
 
 function stepCount(content) {
-  const section = String(content ?? "").split(/^##\s+Implementation Steps\s*$/im)[1] ?? "";
-  const body = section.split(/^##\s+/m)[0] ?? "";
-  return body.match(/^\s*\d+[.)]\s+\S+/gm)?.length ?? 0;
+  return countPlanSteps(String(content ?? ""));
 }
 
 function planRevision(result) {
@@ -72,17 +81,52 @@ function fallbackMarkdownLines(content, width) {
     });
 }
 
+function renderMarkdownLines(content, width) {
+  try {
+    return new Markdown(content, 0, 0, getMarkdownTheme()).render(width);
+  } catch {
+    return fallbackMarkdownLines(content, width);
+  }
+}
+
+function planStreamingComponent(content, theme) {
+  return new DynamicLinesComponent((width) => {
+    const headerLines = claudeCallComponent(
+      "Write Plan",
+      [firstHeading(content)],
+      theme,
+    ).render(width);
+    const normalized = String(content ?? "").trimEnd();
+    const prefix = theme.fg("muted", RESPONSE_PREFIX);
+    if (!normalized) {
+      return [
+        ...headerLines,
+        truncateToWidth(`${prefix}${theme.fg("muted", "Writing plan…")}`, width, "…"),
+      ];
+    }
+
+    const innerWidth = Math.max(1, width - RESPONSE_CONTINUATION.length);
+    const planLines = renderMarkdownLines(normalized, innerWidth);
+    return [
+      ...headerLines,
+      "",
+      ...planLines.map((line, index) =>
+        truncateToWidth(
+          `${index === 0 ? prefix : RESPONSE_CONTINUATION}${line}`,
+          width,
+          "…",
+        ),
+      ),
+    ];
+  });
+}
+
 function planResultComponent(result, content, theme) {
   return new DynamicLinesComponent((width) => {
     const prefix = theme.fg("muted", RESPONSE_PREFIX);
     const status = planStatus(result, content, theme);
     const innerWidth = Math.max(1, width - RESPONSE_CONTINUATION.length);
-    let planLines;
-    try {
-      planLines = new Markdown(content, 0, 0, getMarkdownTheme()).render(innerWidth);
-    } catch {
-      planLines = fallbackMarkdownLines(content, innerWidth);
-    }
+    const planLines = renderMarkdownLines(content, innerWidth);
     return [
       truncateToWidth(`${prefix}${status}`, width, "…"),
       "",
@@ -104,9 +148,18 @@ function renderEnterResult(result, options, theme) {
   );
 }
 
+function withPlanWriteLanguageContract(tool) {
+  return {
+    ...tool,
+    description: PLAN_WRITE_DESCRIPTION,
+    promptGuidelines: [...PLAN_WRITE_PROMPT_GUIDELINES],
+  };
+}
+
 export function wrapPlanToolDefinition(tool) {
   if (!tool || !PLAN_UI_TOOL_NAMES.has(tool.name)) return tool;
-  const wrapped = { ...tool, renderShell: "self" };
+  const prepared = tool.name === "plan_write" ? withPlanWriteLanguageContract(tool) : tool;
+  const wrapped = { ...prepared, renderShell: "self" };
 
   if (tool.name === "EnterPlanMode") {
     return {
@@ -121,12 +174,20 @@ export function wrapPlanToolDefinition(tool) {
 
   return {
     ...wrapped,
-    renderCall(args, theme) {
-      return claudeCallComponent("Write Plan", [firstHeading(args?.content)], theme);
+    renderCall(args, theme, context) {
+      const content = typeof args?.content === "string" ? args.content : "";
+      if (context?.isPartial === true) {
+        return planStreamingComponent(content, theme);
+      }
+      return claudeCallComponent("Write Plan", [firstHeading(content)], theme);
     },
     renderResult(result, options, theme, context) {
       if (options.isPartial) {
-        return responseLinesComponent([theme.fg("muted", "Writing plan…")], theme);
+        const streamingContent =
+          typeof context?.args?.content === "string" ? context.args.content.trimEnd() : "";
+        return streamingContent
+          ? responseLinesComponent([], theme)
+          : responseLinesComponent([theme.fg("muted", "Writing plan…")], theme);
       }
       if (result?.isError) {
         return responseLinesComponent(
@@ -409,9 +470,11 @@ export const __test = {
   firstHeading,
   mapReviewChoice,
   planStatus,
+  planStreamingComponent,
   reviewChoices,
   sanitizeLegacyExitText,
   stepCount,
   textResult,
+  withPlanWriteLanguageContract,
   wrapPlanToolDefinition,
 };

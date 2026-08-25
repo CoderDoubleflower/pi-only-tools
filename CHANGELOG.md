@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stream the growing `plan_write.content` Markdown in the TUI while tool arguments are generated, without writing partial content to the canonical plan file.
+- Make visible plan titles, headings, step labels, and prose follow the user's language; validate localized plans by semantic H2 order while preserving legacy English plans.
 - Fix automatic Plan review dispatch so `agent_settled` routes through Pi's command pipeline and receives a command-capable context instead of calling `/plan-approve` with an event context.
 - Make a valid `plan_write` publish the exact revision directly to user review and terminate the planning turn.
 - Remove the model-facing `ExitPlanMode` tool; only an explicit user review action can enter execution.
