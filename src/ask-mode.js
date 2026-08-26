@@ -208,13 +208,11 @@ export function registerAskMode(pi, options) {
 
   async function prepareForPlanCommand(args, ctx, next) {
     if (!isActive()) return next();
-    const command = String(args ?? "").trim().split(/\s+/, 1)[0].toLowerCase();
-    if (command === "config") {
+    if (!startsPlanWorkflow(args, planMode.getStage?.())) {
       const result = await next();
       await applySavedConfiguration(ctx);
       return result;
     }
-    if (!startsPlanWorkflow(args, planMode.getStage?.())) return next();
     await leave(ctx, { notify: false });
     try {
       const result = await next();
