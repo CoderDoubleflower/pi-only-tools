@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_ASK_TOOLS, normalizeAskTools } from "./ask-mode-policy.js";
 import { LEGACY_EXIT_PLAN_MODE_TOOL } from "./plan/constants.js";
 
-export const PROFILE_CONFIG_VERSION = 3;
-export const PROFILE_NAMES = Object.freeze(["normal", "plan"]);
+export const PROFILE_CONFIG_VERSION = 4;
+export const PROFILE_NAMES = Object.freeze(["normal", "ask", "plan"]);
 
 export function normalizeToolNames(values) {
   const result = [];
@@ -19,9 +20,23 @@ export function normalizeToolNames(values) {
   return result;
 }
 
+function defaultProfileTools(profile, defaults) {
+  if (profile === "ask") return defaults?.ask ?? DEFAULT_ASK_TOOLS;
+  return defaults?.[profile];
+}
+
+function normalizeProfileTools(profile, values) {
+  return profile === "ask"
+    ? normalizeAskTools(values)
+    : normalizeToolNames(values);
+}
+
 function cloneProfiles(profiles) {
   return Object.fromEntries(
-    PROFILE_NAMES.map((name) => [name, normalizeToolNames(profiles?.[name])]),
+    PROFILE_NAMES.map((name) => [
+      name,
+      normalizeProfileTools(name, defaultProfileTools(name, profiles)),
+    ]),
   );
 }
 
@@ -37,19 +52,35 @@ function normalizeProfileObject(value, defaults, warnings, source) {
   for (const profile of PROFILE_NAMES) {
     const raw = value?.[profile];
     if (raw === undefined) {
-      profiles[profile] = normalizeToolNames(defaults?.[profile]);
+      profiles[profile] = normalizeProfileTools(
+        profile,
+        defaultProfileTools(profile, defaults),
+      );
       continue;
     }
     if (!Array.isArray(raw)) {
       warnings.push(`${source}: profiles.${profile} must be an array of tool names.`);
-      profiles[profile] = normalizeToolNames(defaults?.[profile]);
+      profiles[profile] = normalizeProfileTools(
+        profile,
+        defaultProfileTools(profile, defaults),
+      );
       continue;
     }
-    const normalized = normalizeToolNames(raw);
+    const normalized = normalizeProfileTools(profile, raw);
     if (raw.includes(LEGACY_EXIT_PLAN_MODE_TOOL)) {
       warnings.push(
         `${source}: removed legacy ${LEGACY_EXIT_PLAN_MODE_TOOL}; plan approval is now user-controlled.`,
       );
+    }
+    if (profile === "ask") {
+      const removed = normalizeToolNames(raw).filter(
+        (name) => !normalized.includes(name),
+      );
+      if (removed.length > 0) {
+        warnings.push(
+          `${source}: removed tools that Ask Mode always blocks: ${removed.join(", ")}.`,
+        );
+      }
     }
     profiles[profile] = normalized;
   }
@@ -65,7 +96,7 @@ export async function loadProfileConfig(configPath, defaults = {}) {
     }
 
     if (
-      [2, PROFILE_CONFIG_VERSION].includes(parsed.version) &&
+      [2, 3, PROFILE_CONFIG_VERSION].includes(parsed.version) &&
       parsed.profiles &&
       typeof parsed.profiles === "object"
     ) {
@@ -73,36 +104,55 @@ export async function loadProfileConfig(configPath, defaults = {}) {
         parsed.profiles,
         "execution",
       );
-      const hadLegacyExit = PROFILE_NAMES.some((profile) =>
+      const hadAskProfile = Object.prototype.hasOwnProperty.call(
+        parsed.profiles,
+        "ask",
+      );
+      const hadLegacyExit = ["normal", "ask", "plan"].some((profile) =>
         Array.isArray(parsed.profiles[profile])
           ? parsed.profiles[profile].includes(LEGACY_EXIT_PLAN_MODE_TOOL)
           : false,
       );
+      const normalizedProfiles = normalizeProfileObject(
+        parsed.profiles,
+        defaults,
+        warnings,
+        configPath,
+      );
+      const askRaw = Array.isArray(parsed.profiles.ask)
+        ? normalizeToolNames(parsed.profiles.ask)
+        : [];
+      const hadBlockedAskTools = askRaw.some(
+        (name) => !normalizedProfiles.ask.includes(name),
+      );
+
       if (hadExecutionProfile) {
         warnings.push(
           `${configPath}: removed legacy profiles.execution; approved plans execute with the Normal profile.`,
         );
       }
-      if (parsed.version === 2) {
+      if (!hadAskProfile) {
         warnings.push(
-          `${configPath}: migrated profile config from version 2 to ${PROFILE_CONFIG_VERSION}.`,
+          `${configPath}: added the persistent Ask profile with safe read-only defaults.`,
+        );
+      }
+      if (parsed.version !== PROFILE_CONFIG_VERSION) {
+        warnings.push(
+          `${configPath}: migrated profile config from version ${parsed.version} to ${PROFILE_CONFIG_VERSION}.`,
         );
       }
       return {
         config: {
           version: PROFILE_CONFIG_VERSION,
-          profiles: normalizeProfileObject(
-            parsed.profiles,
-            defaults,
-            warnings,
-            configPath,
-          ),
+          profiles: normalizedProfiles,
         },
         warnings,
         migrated:
           parsed.version !== PROFILE_CONFIG_VERSION ||
           hadExecutionProfile ||
-          hadLegacyExit,
+          !hadAskProfile ||
+          hadLegacyExit ||
+          hadBlockedAskTools,
       };
     }
 
@@ -111,15 +161,19 @@ export async function loadProfileConfig(configPath, defaults = {}) {
     );
     const migratedProfiles = {};
     for (const profile of PROFILE_NAMES) {
-      migratedProfiles[profile] = normalizeToolNames(defaults?.[profile]).filter(
-        (name) => !legacyDisabled.has(name),
-      );
+      migratedProfiles[profile] = normalizeProfileTools(
+        profile,
+        defaultProfileTools(profile, defaults),
+      ).filter((name) => !legacyDisabled.has(name));
     }
     if (legacyDisabled.size > 0 || parsed.version === 1) {
       warnings.push(
         `${configPath}: migrated legacy permanentlyDisabledTools into profile allowlists.`,
       );
     }
+    warnings.push(
+      `${configPath}: added the persistent Ask profile with safe read-only defaults.`,
+    );
     return {
       config: createProfileConfig(migratedProfiles),
       warnings,

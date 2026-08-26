@@ -1,4 +1,9 @@
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  DEFAULT_ASK_TOOLS,
+  isAskToolConfigurable,
+  normalizeAskTools,
+} from "./ask-mode-policy.js";
 import { loadPlanModeConfig, savePlanModeConfig } from "./plan/config.js";
 import {
   ENTER_PLAN_MODE_TOOL,
@@ -14,6 +19,7 @@ import {
 
 const PROFILE_LABELS = Object.freeze({
   normal: "Normal",
+  ask: "Ask",
   plan: "Plan",
 });
 const CONTROL_TOOLS = new Set([ENTER_PLAN_MODE_TOOL, PLAN_WRITE_TOOL]);
@@ -32,34 +38,32 @@ function copy() {
   return isChineseLocale()
     ? {
         title: "Only Tools",
-        subtitle: "",
         model: "Model",
         effort: "Effort",
         modelCurrent: "Pi 当前",
         effortCurrent: "Pi 当前",
-        selected: "当前",
+        inheritNormal: "继承 Normal",
         lockedRequired: "Plan 工作流必需",
         lockedControl: "该 Profile 不使用此控制工具",
+        lockedAskWrite: "Ask 模式禁止命令/编辑工具",
+        askPolicy: "Ask 列是显式只读 allowlist；第三方/MCP 工具请仅启用读取类操作。",
         unregistered: "当前未注册",
-        editModel: "Enter：选择模型",
-        editEffort: "Enter：选择 effort",
         help: "↑↓ 行  ←→ Profile  Enter/Space 切换  M 模型  E/T Effort  A/N/R  Esc 保存",
         saved: "Profile 工具矩阵已保存",
         requiresTui: "Profile 工具矩阵仅在 Pi TUI 模式中可用。",
       }
     : {
         title: "Only Tools",
-        subtitle: "",
         model: "Model",
         effort: "Effort",
         modelCurrent: "Pi current",
         effortCurrent: "Pi current",
-        selected: "Selected",
+        inheritNormal: "inherit Normal",
         lockedRequired: "required by Plan workflow",
         lockedControl: "control tool is not used by this profile",
+        lockedAskWrite: "command/edit tool is blocked in Ask Mode",
+        askPolicy: "Ask is an explicit read-only allowlist; enable only read operations for third-party/MCP tools.",
         unregistered: "not registered now",
-        editModel: "Enter: choose model",
-        editEffort: "Enter: choose effort",
         help: "↑↓ row  ←→ profile  Enter/Space toggle  M model  E/T effort  A/N/R  Esc save",
         saved: "Tool profile matrix saved",
         requiresTui: "The tool profile matrix is available only in Pi TUI mode.",
@@ -150,6 +154,9 @@ function lockedCell(profile, toolName) {
   if (toolName === ENTER_PLAN_MODE_TOOL && profile !== "normal") {
     return { locked: true, value: false, reason: "control" };
   }
+  if (profile === "ask" && !isAskToolConfigurable(toolName)) {
+    return { locked: true, value: false, reason: "ask" };
+  }
   return { locked: false, value: undefined, reason: undefined };
 }
 
@@ -161,6 +168,10 @@ function enforceProfileRules(profile, names) {
     result.add(PLAN_WRITE_TOOL);
   } else {
     result.delete(PLAN_WRITE_TOOL);
+  }
+  if (profile === "ask") {
+    result.delete(ENTER_PLAN_MODE_TOOL);
+    return normalizeAskTools([...result]);
   }
   return [...result];
 }
@@ -257,6 +268,10 @@ class ProfileMatrixComponent {
     return "tool";
   }
 
+  phaseEditable(profile = this.currentProfile()) {
+    return profile !== "ask";
+  }
+
   phaseProfile(profile) {
     return profile === "plan"
       ? this.phaseProfiles.planning
@@ -320,9 +335,9 @@ class ProfileMatrixComponent {
 
   activateCurrent() {
     const kind = this.currentKind();
-    if (kind === "model") this.finish("model");
-    else if (kind === "effort") this.finish("thinking");
-    else this.toggleCurrentTool();
+    if (kind === "model" && this.phaseEditable()) this.finish("model");
+    else if (kind === "effort" && this.phaseEditable()) this.finish("thinking");
+    else if (kind === "tool") this.toggleCurrentTool();
   }
 
   handleInput(data) {
@@ -338,8 +353,12 @@ class ProfileMatrixComponent {
     } else if (data.toLowerCase?.() === "a") this.setProfileTools("all");
     else if (data.toLowerCase?.() === "n") this.setProfileTools("none");
     else if (data.toLowerCase?.() === "r") this.setProfileTools("reset");
-    else if (data.toLowerCase?.() === "m") this.finish("model");
-    else if (["e", "t"].includes(data.toLowerCase?.())) {
+    else if (data.toLowerCase?.() === "m" && this.phaseEditable()) {
+      this.finish("model");
+    } else if (
+      ["e", "t"].includes(data.toLowerCase?.()) &&
+      this.phaseEditable()
+    ) {
       this.finish("thinking");
     } else if (
       data === "\u001b" ||
@@ -371,12 +390,12 @@ class ProfileMatrixComponent {
   }
 
   render(width) {
-    const w = Math.max(40, Math.floor(width));
+    const w = Math.max(48, Math.floor(width));
     const longestTool = this.tools.reduce(
       (max, tool) => Math.max(max, tool.name.length),
       0,
     );
-    const maxLabelForWidth = Math.max(10, Math.floor(w * 0.4));
+    const maxLabelForWidth = Math.max(10, Math.floor(w * 0.35));
     const labelWidth = Math.min(
       30,
       maxLabelForWidth,
@@ -384,10 +403,10 @@ class ProfileMatrixComponent {
     );
     const gap = 2;
     const availableProfileWidth = Math.max(
-      8,
-      Math.floor((w - labelWidth - gap * 2) / PROFILE_NAMES.length),
+      7,
+      Math.floor((w - labelWidth - gap * PROFILE_NAMES.length) / PROFILE_NAMES.length),
     );
-    const profileWidth = Math.min(28, availableProfileWidth);
+    const profileWidth = Math.min(24, availableProfileWidth);
     const pad = (value, size) =>
       truncateToWidth(String(value), Math.max(1, size - 1), "…").padEnd(size);
     const isSelected = (rowIndex, colIndex) =>
@@ -429,6 +448,7 @@ class ProfileMatrixComponent {
     ];
 
     const modelValues = PROFILE_NAMES.map((profile) => {
+      if (profile === "ask") return this.copy.inheritNormal;
       const phase = this.phaseProfile(profile);
       const fallback = profile === "normal" ? this.copy.modelCurrent : "inherit";
       return formatModel(phase, fallback);
@@ -443,6 +463,7 @@ class ProfileMatrixComponent {
     );
 
     const effortValues = PROFILE_NAMES.map((profile) => {
+      if (profile === "ask") return this.copy.inheritNormal;
       const phase = this.phaseProfile(profile);
       return (
         phase?.thinkingLevel ??
@@ -478,23 +499,23 @@ class ProfileMatrixComponent {
 
     const profile = this.currentProfile();
     const tool = this.currentTool();
+    const notes = [];
+    if (profile === "ask") notes.push(this.copy.askPolicy);
     if (tool) {
       const lock = lockedCell(profile, tool.name);
-      const notes = [];
-      if (!tool.registered) notes.push(this.copy.unregistered);
+      if (!tool.registered) notes.push(`${tool.name}: ${this.copy.unregistered}`);
       if (lock.locked) {
-        notes.push(
+        const reason =
           lock.reason === "required"
             ? this.copy.lockedRequired
-            : this.copy.lockedControl,
-        );
+            : lock.reason === "ask"
+              ? this.copy.lockedAskWrite
+              : this.copy.lockedControl;
+        notes.push(`${tool.name}: ${reason}`);
       }
-      if (notes.length > 0) {
-        lines.push(
-          "",
-          this.theme.fg("muted", `${tool.name} · ${notes.join(" · ")}`),
-        );
-      }
+    }
+    if (notes.length > 0) {
+      lines.push("", ...notes.map((note) => this.theme.fg("muted", note)));
     }
     lines.push("", this.theme.fg("muted", this.copy.help));
     if (start > 0 || end < this.tools.length) {
@@ -522,7 +543,10 @@ export async function openProfileMatrix(pi, ctx, options) {
   const defaults = Object.fromEntries(
     PROFILE_NAMES.map((profile) => [
       profile,
-      storedProfileTools(profile, options.defaults?.[profile] ?? []),
+      storedProfileTools(
+        profile,
+        options.defaults?.[profile] ?? (profile === "ask" ? DEFAULT_ASK_TOOLS : []),
+      ),
     ]),
   );
   const loaded = await loadProfileConfig(options.configPath, defaults);

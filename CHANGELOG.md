@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a persistent Ask tool profile beside Normal and Plan in `/only-tools`; Ask model and effort inherit Normal.
+- Add one `/mode` selector for Normal, Ask, and Plan, and remove the separate `/ask` command family.
+- Keep Shift+Tab as one global mode cycle: Normal → Ask → Plan → Normal, while preserving the idle-only switching guard.
+- Make the Ask column an explicit user-maintained allowlist for read-only third-party/MCP tools while locking known shell, edit, write, patch, and Plan-control tools off.
+- Enforce Ask permissions both through the active tool set and a second `tool_call` allowlist check.
+- Inject an explicit `[ASK MODE ACTIVE]` system contract that forbids file, Git, dependency, service, command, build, and test side effects.
+- Upgrade profile configuration to version 4 and migrate existing Normal/Plan files with a safe default Ask profile.
 - Stream the growing `plan_write.content` Markdown in the TUI while tool arguments are generated, without writing partial content to the canonical plan file.
 - Make visible plan titles, headings, step labels, and prose follow the user's language; validate localized plans by semantic H2 order while preserving legacy English plans.
 - Fix automatic Plan review dispatch so `agent_settled` routes through Pi's command pipeline and receives a command-capable context instead of calling `/plan-approve` with an event context.
@@ -9,7 +16,6 @@
 - Remove the model-facing `ExitPlanMode` tool; only an explicit user review action can enter execution.
 - Render `EnterPlanMode` and `plan_write` with Claude-style tool framing and Pi Markdown instead of one muted text block.
 - Keep approved-plan handoff messages hidden from the transcript so a revision is displayed only once.
-- Upgrade profile configuration to version 3 and remove legacy `ExitPlanMode` entries from persisted Normal/Plan profiles.
 - Strengthen the planning prompt and canonical template with verified current state, concrete implementation flow, compatibility risks, and repository-supported verification.
 
 ## 0.5.3
