@@ -117,7 +117,7 @@ export function registerAskMode(pi, options) {
     updateUi(ctx);
     if (warnIfEmpty && tools.length === 0) {
       ctx.ui.notify(
-        "Ask Mode has no available read-only tools. Enable read/search tools in the Plan profile or answer without tools.",
+        "Ask Mode has no available read-only tools. Enable read, grep, find, ls, or ask_user_question in the Plan profile.",
         "warning",
       );
     }
@@ -172,9 +172,11 @@ export function registerAskMode(pi, options) {
         throw error;
       }
       if (!entered) {
-        await enter(ctx, { notify: false });
-        ctx.ui.notify("Plan Mode could not be entered; Ask Mode was restored.", "warning");
-        return "ask";
+        ctx.ui.notify(
+          "Plan Mode is unavailable in the current Plan workflow state; switched to Normal.",
+          "warning",
+        );
+        return "normal";
       }
       return "plan";
     }
