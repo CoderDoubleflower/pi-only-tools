@@ -14,8 +14,6 @@ export const DEFAULT_ASK_TOOLS = Object.freeze([
 ]);
 
 const DEFAULT_ASK_TOOL_SET = new Set(DEFAULT_ASK_TOOLS);
-const READ_ONLY_NAME_PATTERN =
-  /(?:^|[_:./-])(read|get|list|search|find|grep|ls|show|view|fetch|inspect|lookup|status|diff|history|log|stat|count)(?:$|[_:./-])/i;
 
 function uniqueToolNames(values) {
   const result = [];
@@ -31,15 +29,13 @@ function uniqueToolNames(values) {
 }
 
 /**
- * Ask Mode is fail-closed. A tool must either be one of Pi's known read-only
- * tools or have a clearly read-oriented name. Shell/command tools are therefore
- * never admitted merely because their prompt asks the model to behave safely.
+ * Pi does not expose read-only annotations on ToolDefinition. Ask Mode therefore
+ * uses an exact allowlist instead of guessing from custom tool names. This keeps
+ * shell, command, MCP, and other unknown tools disabled by default.
  */
 export function isAskReadOnlyToolName(value) {
   if (typeof value !== "string") return false;
-  const name = value.trim();
-  if (!name) return false;
-  return DEFAULT_ASK_TOOL_SET.has(name) || READ_ONLY_NAME_PATTERN.test(name);
+  return DEFAULT_ASK_TOOL_SET.has(value.trim());
 }
 
 export function normalizeAskTools(values) {
@@ -79,7 +75,7 @@ Hard constraints:
 - Do not change configuration, dependencies, Git state, external systems, running services, or user data.
 - Do not run shell commands, scripts, builds, tests, installers, or any other operation that may have side effects.
 - The only tools available in Ask Mode are: ${formatToolNames(allowedTools)}.
-- Use those tools only for reading, searching, listing, fetching, inspecting, or asking a material clarification question.
+- Use those tools only for reading, searching, listing, inspecting, or asking a material clarification question.
 - An allowed tool name does not grant permission to use it for a write or side effect.
 - Do not attempt to bypass a blocked or unavailable tool.
 - Do not claim that code was changed, commands were run, or tests passed.
@@ -92,6 +88,5 @@ Answering process:
 }
 
 export const __test = {
-  READ_ONLY_NAME_PATTERN,
   uniqueToolNames,
 };
