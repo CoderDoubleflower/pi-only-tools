@@ -169,10 +169,10 @@ planStage = "executing";
 await commands.get("ask").handler("on", ctx);
 assert.equal(ask.getMode(), "ask");
 assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
-await waitFor(() => ask.getMode() === "normal");
+await waitFor(() => notifications.some((entry) => entry.message.includes("switched to Normal")));
+assert.equal(ask.getMode(), "normal");
 assert.equal(planStage, "executing");
 assert.equal(profiles.snapshot().mode, "normal");
-assert.ok(notifications.some((entry) => entry.message.includes("switched to Normal")));
 
 await commands.get("ask").handler("on Explain the repository", ctx);
 assert.equal(ask.getMode(), "ask");
