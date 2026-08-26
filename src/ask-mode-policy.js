@@ -2,13 +2,14 @@ import {
   ASK_USER_QUESTION_TOOL,
   ENTER_PLAN_MODE_TOOL,
   LEGACY_EXIT_PLAN_MODE_TOOL,
+  MODE_STATUS_KEY_PREFIX,
   PLAN_WRITE_TOOL,
   READ_ONLY_PLAN_TOOLS,
 } from "./plan/constants.js";
 
 export const ASK_MODE_PROFILE = "ask";
 export const ASK_MODE_STATE_ENTRY = "pi-only-tools-ask-mode-state";
-export const ASK_MODE_STATUS_KEY = "pi-only-tools-ask-mode";
+export const ASK_MODE_STATUS_KEY = `${MODE_STATUS_KEY_PREFIX}-ask`;
 export const ASK_MODE_STATE_VERSION = 1;
 
 export const DEFAULT_ASK_TOOLS = Object.freeze([
