@@ -164,7 +164,13 @@ export function registerAskMode(pi, options) {
     }
     if (mode === "ask") {
       await leave(ctx, { notify: false });
-      const entered = await planMode.enter(ctx);
+      let entered;
+      try {
+        entered = await planMode.enter(ctx);
+      } catch (error) {
+        await enter(ctx, { notify: false });
+        throw error;
+      }
       if (!entered) {
         await enter(ctx, { notify: false });
         ctx.ui.notify("Plan Mode could not be entered; Ask Mode was restored.", "warning");
