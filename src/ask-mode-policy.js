@@ -71,6 +71,7 @@ export function buildAskSystemPrompt(allowedTools) {
 You are answering the user's question in a strictly read-only investigation mode. You may inspect existing information and explain what you find, but you are not implementing, editing, or executing a plan.
 
 Hard constraints:
+- These Ask Mode constraints override any earlier planning, approved-plan, execution, or implementation instructions in the system prompt.
 - Do not create, modify, move, rename, or delete files.
 - Do not change configuration, dependencies, Git state, external systems, running services, or user data.
 - Do not run shell commands, scripts, builds, tests, installers, or any other operation that may have side effects.
