@@ -1,5 +1,8 @@
 import {
   ASK_USER_QUESTION_TOOL,
+  ENTER_PLAN_MODE_TOOL,
+  LEGACY_EXIT_PLAN_MODE_TOOL,
+  PLAN_WRITE_TOOL,
   READ_ONLY_PLAN_TOOLS,
 } from "./plan/constants.js";
 
@@ -13,7 +16,19 @@ export const DEFAULT_ASK_TOOLS = Object.freeze([
   ASK_USER_QUESTION_TOOL,
 ]);
 
-const DEFAULT_ASK_TOOL_SET = new Set(DEFAULT_ASK_TOOLS);
+export const ASK_MODE_FORBIDDEN_TOOLS = Object.freeze([
+  "shell_command",
+  "apply_patch",
+  "bash",
+  "powershell",
+  "edit",
+  "write",
+  ENTER_PLAN_MODE_TOOL,
+  PLAN_WRITE_TOOL,
+  LEGACY_EXIT_PLAN_MODE_TOOL,
+]);
+
+const ASK_MODE_FORBIDDEN_TOOL_SET = new Set(ASK_MODE_FORBIDDEN_TOOLS);
 
 function uniqueToolNames(values) {
   const result = [];
@@ -29,30 +44,35 @@ function uniqueToolNames(values) {
 }
 
 /**
- * Pi does not expose read-only annotations on ToolDefinition. Ask Mode therefore
- * uses an exact allowlist instead of guessing from custom tool names. This keeps
- * shell, command, MCP, and other unknown tools disabled by default.
+ * Ask is an explicit user-maintained allowlist. Pi does not expose a generic
+ * read-only annotation for custom tools, so /only-tools is the source of truth
+ * for third-party and MCP tools. Known command/edit/control tools stay locked
+ * off even if they appear in an older configuration.
  */
-export function isAskReadOnlyToolName(value) {
+export function isAskToolConfigurable(value) {
   if (typeof value !== "string") return false;
-  return DEFAULT_ASK_TOOL_SET.has(value.trim());
+  const name = value.trim();
+  return Boolean(name) && !ASK_MODE_FORBIDDEN_TOOL_SET.has(name);
 }
 
+// Backward-compatible export for the first Ask Mode implementation.
+export const isAskReadOnlyToolName = isAskToolConfigurable;
+
 export function normalizeAskTools(values) {
-  return uniqueToolNames(values).filter(isAskReadOnlyToolName);
+  return uniqueToolNames(values).filter(isAskToolConfigurable);
 }
 
 export function getDefaultAskTools(allToolNames) {
-  const selected = [...DEFAULT_ASK_TOOLS];
+  const selected = normalizeAskTools(DEFAULT_ASK_TOOLS);
   if (!(allToolNames instanceof Set)) return selected;
   return selected.filter((name) => allToolNames.has(name));
 }
 
 export function buildAskTools(configuredTools, allToolNames) {
   const selected = configuredTools ?? getDefaultAskTools(allToolNames);
-  const readOnly = normalizeAskTools(selected);
-  if (!(allToolNames instanceof Set)) return readOnly;
-  return readOnly.filter((name) => allToolNames.has(name));
+  const allowed = normalizeAskTools(selected);
+  if (!(allToolNames instanceof Set)) return allowed;
+  return allowed.filter((name) => allToolNames.has(name));
 }
 
 export function isAskToolAllowed(toolName, configuredTools, allToolNames) {
@@ -75,9 +95,9 @@ Hard constraints:
 - Do not create, modify, move, rename, or delete files.
 - Do not change configuration, dependencies, Git state, external systems, running services, or user data.
 - Do not run shell commands, scripts, builds, tests, installers, or any other operation that may have side effects.
-- The only tools available in Ask Mode are: ${formatToolNames(allowedTools)}.
-- Use those tools only for reading, searching, listing, inspecting, or asking a material clarification question.
-- An allowed tool name does not grant permission to use it for a write or side effect.
+- The Ask Profile configured in /only-tools is the explicit tool allowlist for this mode: ${formatToolNames(allowedTools)}.
+- Use an allowed tool only for reading, searching, listing, fetching, inspecting, or asking a material clarification question.
+- User configuration grants tool visibility, not permission to perform a write or side effect.
 - Do not attempt to bypass a blocked or unavailable tool.
 - Do not claim that code was changed, commands were run, or tests passed.
 
@@ -89,5 +109,6 @@ Answering process:
 }
 
 export const __test = {
+  ASK_MODE_FORBIDDEN_TOOL_SET,
   uniqueToolNames,
 };
