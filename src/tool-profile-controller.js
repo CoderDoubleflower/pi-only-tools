@@ -24,6 +24,7 @@ export class ToolProfileController {
     const initial = uniqueToolNames(options.initialTools ?? []);
     this.profiles = new Map([
       ["normal", initial],
+      ["ask", []],
       ["plan", []],
     ]);
   }
@@ -86,10 +87,12 @@ export class ToolProfileController {
       mode: this.mode,
       requested: {
         normal: this.getRequestedTools("normal"),
+        ask: this.getRequestedTools("ask"),
         plan: this.getRequestedTools("plan"),
       },
       effective: {
         normal: this.getEffectiveTools("normal"),
+        ask: this.getEffectiveTools("ask"),
         plan: this.getEffectiveTools("plan"),
       },
       activeTools: this.getEffectiveTools(),
