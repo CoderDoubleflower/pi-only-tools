@@ -104,6 +104,7 @@ const ctx = {
 const planMode = {
   getStage: () => planStage,
   async enter() {
+    if (planStage === "executing") return false;
     planStage = "planning";
     profiles.activate("plan");
     return true;
@@ -147,6 +148,7 @@ assert.deepEqual(activeTools, ["read", "grep", "ask_user_question"]);
 const prompt = await emit("before_agent_start", { systemPrompt: "base" });
 assert.match(prompt.systemPrompt, /\[ASK MODE ACTIVE\]/);
 assert.match(prompt.systemPrompt, /strictly read-only/);
+assert.match(prompt.systemPrompt, /override any earlier planning/);
 assert.doesNotMatch(prompt.systemPrompt, /shell_command/);
 assert.equal(await emit("tool_call", { toolName: "read" }), undefined);
 const blocked = await emit("tool_call", { toolName: "apply_patch" });
@@ -162,6 +164,15 @@ assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
 await waitFor(() => ask.getMode() === "normal");
 assert.equal(planStage, "idle");
 assert.equal(profiles.snapshot().mode, "normal");
+
+planStage = "executing";
+await commands.get("ask").handler("on", ctx);
+assert.equal(ask.getMode(), "ask");
+assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
+await waitFor(() => ask.getMode() === "normal");
+assert.equal(planStage, "executing");
+assert.equal(profiles.snapshot().mode, "normal");
+assert.ok(notifications.some((entry) => entry.message.includes("switched to Normal")));
 
 await commands.get("ask").handler("on Explain the repository", ctx);
 assert.equal(ask.getMode(), "ask");
