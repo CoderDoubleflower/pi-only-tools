@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep Ask and Plan footer statuses in the same leading plugin-status slot by using distinct keys with one shared fixed sort prefix.
 - Add a persistent Ask tool profile beside Normal and Plan in `/only-tools`; Ask model and effort inherit Normal.
 - Add one `/mode` selector for Normal, Ask, and Plan, and remove the separate `/ask` command family.
 - Keep Shift+Tab as one global mode cycle: Normal → Ask → Plan → Normal, while preserving the idle-only switching guard.
@@ -58,7 +59,7 @@
 - Defer all ExtensionAPI runtime action calls until Pi has initialized the session runtime.
 - Initialize the normal tool profile during session_start instead of extension registration.
 - Remove the registration-time tool-registry probe; standalone Plan Mode should be uninstalled before using the integrated runtime.
-- Add a regression test that makes runtime actions throw during extension loading.
+- Add a regression test that makes runtime action methods throw during extension loading.
 
 ## 0.4.0
 
