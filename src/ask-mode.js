@@ -19,6 +19,12 @@ const PLAN_NON_ENTERING_COMMANDS = new Set([
   "path",
   "status",
 ]);
+const MODE_NAMES = Object.freeze(["normal", "ask", "plan"]);
+const MODE_LABELS = Object.freeze({
+  normal: "Normal",
+  ask: "Ask",
+  plan: "Plan",
+});
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -67,6 +73,12 @@ function startsPlanWorkflow(args, stage) {
   return !PLAN_NON_ENTERING_COMMANDS.has(command);
 }
 
+function modeFromChoice(choice) {
+  if (typeof choice !== "string") return undefined;
+  const normalized = choice.trim().toLowerCase();
+  return MODE_NAMES.includes(normalized) ? normalized : undefined;
+}
+
 export function registerAskMode(pi, options) {
   const toolProfiles = options.toolProfiles;
   const planMode = options.planMode;
@@ -91,9 +103,10 @@ export function registerAskMode(pi, options) {
   }
 
   function selectedAskTools() {
-    const names = allToolNames();
-    const configured = toolProfiles.getRequestedTools("plan");
-    return buildAskTools(configured, names);
+    return buildAskTools(
+      toolProfiles.getRequestedTools(ASK_MODE_PROFILE),
+      allToolNames(),
+    );
   }
 
   function updateUi(ctx) {
@@ -117,7 +130,7 @@ export function registerAskMode(pi, options) {
     updateUi(ctx);
     if (warnIfEmpty && tools.length === 0) {
       ctx.ui.notify(
-        "Ask Mode has no available read-only tools. Enable read, grep, find, ls, or ask_user_question in the Plan profile.",
+        "Ask Mode has no available tools. Configure the Ask column in /only-tools.",
         "warning",
       );
     }
@@ -132,7 +145,7 @@ export function registerAskMode(pi, options) {
     }
     commit(true, ctx);
     const tools = activateAskTools(ctx, { warnIfEmpty: true });
-    const message = `Ask Mode enabled with read-only tools: ${tools.join(", ") || "none"}.`;
+    const message = `Ask Mode enabled with configured tools: ${tools.join(", ") || "none"}.`;
     if (enterOptions.notify !== false) ctx.ui.notify(message, "info");
     return { entered: true, message };
   }
@@ -142,9 +155,59 @@ export function registerAskMode(pi, options) {
     if (wasActive) commit(false, ctx);
     else updateUi(ctx);
     if (!isPlanActive()) toolProfiles.activate("normal");
-    const message = "Ask Mode disabled; the Normal profile is active.";
+    const message = "Normal Mode enabled.";
     if (wasActive && leaveOptions.notify !== false) ctx.ui.notify(message, "info");
     return { left: wasActive, message };
+  }
+
+  async function setMode(requestedMode, ctx, setOptions = {}) {
+    const mode = modeFromChoice(requestedMode);
+    if (!mode) throw new Error(`Unknown mode: ${requestedMode}`);
+    const current = getMode();
+    const notify = setOptions.notify !== false;
+
+    if (mode === current) {
+      if (mode === "ask") activateAskTools(ctx);
+      if (notify) ctx.ui.notify(`${MODE_LABELS[mode]} Mode is already active.`, "info");
+      return { mode, changed: false };
+    }
+
+    if (mode === "normal") {
+      if (isPlanActive()) await planMode.leave(ctx);
+      if (state?.active === true) commit(false, ctx);
+      else updateUi(ctx);
+      toolProfiles.activate("normal");
+      if (notify) ctx.ui.notify("Normal Mode enabled.", "info");
+      return { mode: "normal", changed: true };
+    }
+
+    if (mode === "ask") {
+      await enter(ctx, { notify });
+      return { mode: "ask", changed: true };
+    }
+
+    if (state?.active === true) commit(false, ctx);
+    toolProfiles.activate("normal");
+    let entered = false;
+    try {
+      entered = await planMode.enter(ctx);
+    } catch (error) {
+      toolProfiles.activate("normal");
+      updateUi(ctx);
+      throw error;
+    }
+    if (!entered) {
+      toolProfiles.activate("normal");
+      updateUi(ctx);
+      if (notify) {
+        ctx.ui.notify(
+          "Plan Mode is unavailable in the current workflow state; Normal Mode remains active.",
+          "warning",
+        );
+      }
+      return { mode: "normal", changed: current !== "normal" };
+    }
+    return { mode: "plan", changed: true };
   }
 
   async function cycle(ctx) {
@@ -156,33 +219,38 @@ export function registerAskMode(pi, options) {
       return getMode();
     }
 
-    const mode = getMode();
-    if (mode === "normal") {
-      await enter(ctx, { notify: false });
+    const current = getMode();
+    const next = current === "normal" ? "ask" : current === "ask" ? "plan" : "normal";
+    const result = await setMode(next, ctx, { notify: false });
+    if (current === "normal" && result.mode === "ask") {
       ctx.ui.notify("Ask Mode on · Shift+Tab for Plan Mode", "info");
-      return "ask";
+    } else if (current === "ask" && result.mode === "plan") {
+      ctx.ui.notify("Plan Mode on · Shift+Tab for Normal Mode", "info");
+    } else if (result.mode === "normal") {
+      const type = next === "plan" ? "warning" : "info";
+      const message =
+        next === "plan"
+          ? "Plan Mode is unavailable in the current workflow state; switched to Normal."
+          : "Normal Mode enabled.";
+      ctx.ui.notify(message, type);
     }
-    if (mode === "ask") {
-      await leave(ctx, { notify: false });
-      let entered;
-      try {
-        entered = await planMode.enter(ctx);
-      } catch (error) {
-        await enter(ctx, { notify: false });
-        throw error;
-      }
-      if (!entered) {
-        ctx.ui.notify(
-          "Plan Mode is unavailable in the current Plan workflow state; switched to Normal.",
-          "warning",
-        );
-        return "normal";
-      }
-      return "plan";
-    }
+    return result.mode;
+  }
 
-    await planMode.leave(ctx);
-    return "normal";
+  async function openModeMenu(ctx) {
+    await ctx.waitForIdle?.();
+    if (!ctx.hasUI || typeof ctx.ui.select !== "function") {
+      ctx.ui.notify("The /mode selector requires interactive UI.", "warning");
+      return { mode: getMode(), changed: false };
+    }
+    const current = getMode();
+    const choice = await ctx.ui.select(
+      `Select mode · current: ${MODE_LABELS[current]}`,
+      MODE_NAMES.map((name) => MODE_LABELS[name]),
+    );
+    const selected = modeFromChoice(choice);
+    if (!selected) return { mode: current, changed: false };
+    return setMode(selected, ctx);
   }
 
   function installShiftTabCycle(ctx) {
@@ -232,58 +300,10 @@ export function registerAskMode(pi, options) {
     }
   }
 
-  pi.registerCommand("ask", {
-    description: "Start, inspect, configure, or stop read-only Ask Mode",
-    handler: async (args, ctx) => {
-      await ctx.waitForIdle?.();
-      const raw = args.trim();
-      if (!raw) {
-        if (isActive()) {
-          ctx.ui.notify(
-            `Ask Mode is active. Read-only tools: ${selectedAskTools().join(", ") || "none"}.`,
-            "info",
-          );
-        } else {
-          await enter(ctx);
-        }
-        return;
-      }
-
-      const [command = "", ...rest] = raw.split(/\s+/);
-      const normalized = command.toLowerCase();
-      const task = rest.join(" ").trim();
-      if (["on", "start"].includes(normalized)) {
-        await enter(ctx);
-        if (task) pi.sendUserMessage(task, { expandPromptTemplates: true });
-        return;
-      }
-      if (["off", "stop", "cancel"].includes(normalized)) {
-        await leave(ctx);
-        return;
-      }
-      if (normalized === "status") {
-        ctx.ui.notify(
-          JSON.stringify(
-            {
-              mode: getMode(),
-              active: isActive(),
-              tools: selectedAskTools(),
-            },
-            null,
-            2,
-          ),
-          "info",
-        );
-        return;
-      }
-      if (normalized === "config") {
-        const result = await options.openConfig?.(ctx);
-        if (result?.saved) await applySavedConfiguration(ctx);
-        return;
-      }
-
-      await enter(ctx);
-      pi.sendUserMessage(raw, { expandPromptTemplates: true });
+  pi.registerCommand("mode", {
+    description: "Choose Normal, Ask, or Plan mode",
+    handler: async (_args, ctx) => {
+      await openModeMenu(ctx);
     },
   });
 
@@ -302,7 +322,7 @@ export function registerAskMode(pi, options) {
     ctx.ui.setStatus(ASK_MODE_STATUS_KEY, undefined);
   });
 
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", (event) => {
     if (!isActive()) return;
     toolProfiles.apply();
     const tools = toolProfiles.getEffectiveTools(ASK_MODE_PROFILE);
@@ -317,7 +337,7 @@ export function registerAskMode(pi, options) {
     if (allowed.includes(event.toolName)) return;
     return {
       block: true,
-      reason: `Ask Mode blocks ${event.toolName}. Allowed read-only tools: ${allowed.join(", ") || "none"}.`,
+      reason: `Ask Mode blocks ${event.toolName}. Allowed tools from /only-tools: ${allowed.join(", ") || "none"}.`,
     };
   });
 
@@ -330,12 +350,17 @@ export function registerAskMode(pi, options) {
     getState: () => state,
     isActive,
     leave,
+    openModeMenu,
     prepareForPlanCommand,
+    setMode,
   };
 }
 
 export const __test = {
+  MODE_LABELS,
+  MODE_NAMES,
   PLAN_NON_ENTERING_COMMANDS,
+  modeFromChoice,
   restoreState,
   startsPlanWorkflow,
   touchState,
