@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import { registerAskMode } from "../src/ask-mode.js";
 import {
+  ASK_MODE_STATUS_KEY,
   buildAskTools,
   isAskToolConfigurable,
 } from "../src/ask-mode-policy.js";
+import {
+  MODE_STATUS_KEY_PREFIX,
+  PLAN_STATUS_KEY,
+} from "../src/plan/constants.js";
 import { createToolProfileController } from "../src/tool-profile-controller.js";
 
 assert.equal(isAskToolConfigurable("read"), true);
@@ -32,6 +37,17 @@ assert.deepEqual(
   ),
   ["read", "web_fetch", "mcp__github__get_file_contents"],
 );
+
+assert.notEqual(ASK_MODE_STATUS_KEY, PLAN_STATUS_KEY);
+assert.equal(ASK_MODE_STATUS_KEY.startsWith(MODE_STATUS_KEY_PREFIX), true);
+assert.equal(PLAN_STATUS_KEY.startsWith(MODE_STATUS_KEY_PREFIX), true);
+const otherStatusKeys = ["alpha-plugin", "mcp-adaptor", "zeta-plugin"];
+const footerSlot = (modeStatusKey) =>
+  [...otherStatusKeys, modeStatusKey]
+    .sort((left, right) => left.localeCompare(right))
+    .indexOf(modeStatusKey);
+assert.equal(footerSlot(ASK_MODE_STATUS_KEY), footerSlot(PLAN_STATUS_KEY));
+assert.equal(footerSlot(ASK_MODE_STATUS_KEY), 0);
 
 const handlers = new Map();
 const commands = new Map();
