@@ -104,15 +104,21 @@ const pi = {
   appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
   sendMessage(message, options) { sentMessages.push({ message, options }); },
   sendUserMessage(content, options) {
-  sentMessages.push({ user: content, options });
-  if (options?.expandPromptTemplates !== true || typeof content !== "string" || !content.startsWith("/")) return;
-  const [commandName, ...rest] = content.slice(1).split(/\s+/);
-  const command = commands.get(commandName);
-  if (!command) throw new Error(`Unknown dispatched command: ${commandName}`);
-  pendingDispatches.push(
-    Promise.resolve().then(() => command.handler(rest.join(" "), ctx)),
-  );
-},
+    sentMessages.push({ user: content, options });
+    if (
+      options?.expandPromptTemplates !== true ||
+      typeof content !== "string" ||
+      !content.startsWith("/")
+    ) {
+      return;
+    }
+    const [commandName, ...rest] = content.slice(1).split(/\s+/);
+    const command = commands.get(commandName);
+    if (!command) throw new Error(`Unknown dispatched command: ${commandName}`);
+    pendingDispatches.push(
+      Promise.resolve().then(() => command.handler(rest.join(" "), ctx)),
+    );
+  },
   setSessionName(name) { sessionName = name; },
   getSessionName: () => sessionName,
   async setModel(model) { ctx.model = model; return true; },
@@ -135,8 +141,10 @@ profiles.setProfile("normal", ["shell_command", "apply_patch", "EnterPlanMode"],
 profiles.setProfile("plan", ["read", "ask_user_question", "plan_write", "ExitPlanMode"], { apply: false });
 profiles.activate("normal");
 assert.equal(plan.enabled, true);
+assert.equal(plan.getMode(), "normal");
 assert.deepEqual([...tools.keys()].sort(), ["EnterPlanMode", "plan_write"].sort());
 assert.equal(tools.has("ExitPlanMode"), false, "ExitPlanMode must not be registered for the model");
+assert.ok(commands.has("ask"), "Ask Mode must register its user command");
 
 async function emit(event, payload = {}) {
   let result;
@@ -147,23 +155,48 @@ async function emit(event, payload = {}) {
   return result;
 }
 
+async function waitForMode(mode) {
+  for (let i = 0; i < 50 && plan.getMode() !== mode; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(plan.getMode(), mode);
+}
+
 await emit("session_start", { reason: "startup" });
-assert.equal(terminalInputHandlers.size, 1);
+assert.equal(terminalInputHandlers.size, 1, "one controller must own Shift+Tab");
 const terminalInputHandler = [...terminalInputHandlers][0];
+
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
-for (let i = 0; i < 50 && profiles.mode !== "plan"; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+await waitForMode("ask");
+assert.equal(profiles.mode, "ask");
+assert.deepEqual(activeTools, ["read", "ask_user_question"]);
+let promptResult = await emit("before_agent_start", { systemPrompt: "base" });
+assert.match(promptResult.systemPrompt, /\[ASK MODE ACTIVE\]/);
+assert.match(promptResult.systemPrompt, /strictly read-only/);
+assert.doesNotMatch(promptResult.systemPrompt, /shell_command/);
+const blockedEdit = await emit("tool_call", { toolName: "apply_patch" });
+assert.equal(blockedEdit.block, true);
+assert.match(blockedEdit.reason, /Ask Mode blocks apply_patch/);
+assert.equal(await emit("tool_call", { toolName: "read" }), undefined);
+
+assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
+await waitForMode("plan");
 assert.equal(profiles.mode, "plan");
+assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
+
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
-for (let i = 0; i < 50 && profiles.mode !== "normal"; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+await waitForMode("normal");
 assert.equal(profiles.mode, "normal");
+assert.deepEqual(activeTools, ["shell_command", "apply_patch", "EnterPlanMode"]);
 
 await commands.get("plan").handler("on Inspect the review workflow", ctx);
 assert.equal(profiles.mode, "plan");
+assert.equal(plan.getMode(), "plan");
 assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
 assert.equal(ctx.model.provider, "planner");
 assert.equal(thinkingLevel, "high");
 
-let promptResult = await emit("before_agent_start", { systemPrompt: "base" });
+promptResult = await emit("before_agent_start", { systemPrompt: "base" });
 assert.match(promptResult.systemPrompt, /Repository reconnaissance/);
 assert.match(promptResult.systemPrompt, /Current State/);
 assert.doesNotMatch(promptResult.systemPrompt, /ExitPlanMode/);
@@ -252,4 +285,4 @@ assert.equal(profiles.mode, "normal");
 await emit("session_shutdown");
 assert.equal(terminalInputHandlers.size, 0);
 await rm(root, { recursive: true, force: true });
-console.log("user-controlled Plan workflow integration tests passed");
+console.log("Normal/Ask/Plan workflow integration tests passed");
