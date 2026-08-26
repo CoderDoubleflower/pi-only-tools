@@ -7,8 +7,8 @@ import {
 import { createToolProfileController } from "../src/tool-profile-controller.js";
 
 assert.equal(isAskReadOnlyToolName("read"), true);
-assert.equal(isAskReadOnlyToolName("mcp__github__get_file_contents"), true);
-assert.equal(isAskReadOnlyToolName("web_fetch"), true);
+assert.equal(isAskReadOnlyToolName("mcp__github__get_file_contents"), false);
+assert.equal(isAskReadOnlyToolName("web_fetch"), false);
 assert.equal(isAskReadOnlyToolName("shell_command"), false);
 assert.equal(isAskReadOnlyToolName("apply_patch"), false);
 assert.equal(isAskReadOnlyToolName("write"), false);
@@ -17,7 +17,7 @@ assert.deepEqual(
     ["read", "web_fetch", "shell_command", "apply_patch", "read"],
     new Set(["read", "web_fetch", "shell_command", "apply_patch"]),
   ),
-  ["read", "web_fetch"],
+  ["read"],
 );
 
 const handlers = new Map();
@@ -142,7 +142,7 @@ assert.equal(terminalInput("x"), undefined);
 assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
 await waitFor(() => ask.getMode() === "ask");
 assert.equal(profiles.snapshot().mode, "ask");
-assert.deepEqual(activeTools, ["read", "grep", "web_fetch", "ask_user_question"]);
+assert.deepEqual(activeTools, ["read", "grep", "ask_user_question"]);
 
 const prompt = await emit("before_agent_start", { systemPrompt: "base" });
 assert.match(prompt.systemPrompt, /\[ASK MODE ACTIVE\]/);
