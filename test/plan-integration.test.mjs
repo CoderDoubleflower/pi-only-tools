@@ -137,14 +137,24 @@ await writeFile(
 
 const profiles = createToolProfileController(pi);
 const plan = registerClaudePlanMode(pi, { toolProfiles: profiles });
-profiles.setProfile("normal", ["shell_command", "apply_patch", "EnterPlanMode"], { apply: false });
-profiles.setProfile("plan", ["read", "ask_user_question", "plan_write", "ExitPlanMode"], { apply: false });
+profiles.setProfile(
+  "normal",
+  ["shell_command", "apply_patch", "EnterPlanMode"],
+  { apply: false },
+);
+profiles.setProfile("ask", ["read", "ask_user_question"], { apply: false });
+profiles.setProfile(
+  "plan",
+  ["read", "ask_user_question", "plan_write", "ExitPlanMode"],
+  { apply: false },
+);
 profiles.activate("normal");
 assert.equal(plan.enabled, true);
 assert.equal(plan.getMode(), "normal");
 assert.deepEqual([...tools.keys()].sort(), ["EnterPlanMode", "plan_write"].sort());
 assert.equal(tools.has("ExitPlanMode"), false, "ExitPlanMode must not be registered for the model");
-assert.ok(commands.has("ask"), "Ask Mode must register its user command");
+assert.ok(commands.has("mode"), "the integrated runtime must register /mode");
+assert.equal(commands.has("ask"), false, "Ask must not expose a separate command");
 
 async function emit(event, payload = {}) {
   let result;
@@ -231,7 +241,7 @@ The current workflow exposes a model-callable exit action and repeats the same p
    - Flow: planning moves to ready after publication; only the user review command can move ready to executing.
 2. **Render the plan exactly once**
    - Files: \`src/plan-tool-ui.js\`, \`src/claude-tool-ui.js\`
-   - Change: use the shared call/result layout and render the Markdown body with semantic styles rather than one muted color.
+   - Change: use the shared call/result layout and render the Markdown body with Pi Markdown.
    - Dependencies: state metadata must be finalized before rendering the result status.
 
 ## Risks and Compatibility
