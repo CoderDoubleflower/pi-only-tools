@@ -7,7 +7,7 @@
 
 两个工具使用紧凑的终端渲染：调用行显示为 `Bash(...)` / `Update(...)`，结果使用 `⎿` 前缀，长输出默认折叠，文件修改显示增删行统计和带行号的 diff。
 
-从 **0.5.0** 开始，Normal 与 Plan 两个 Profile 在同一张工具矩阵中持久配置；计划获用户批准后直接切回 Normal 执行，不存在独立 Execution Profile。Ask 是只在运行时存在的严格只读 Profile：它从 Plan 列中提取已启用的核心读取工具，不新增第三个持久配置列。
+Normal、Ask、Plan 三个工具 Profile 都在 `/only-tools` 的同一张矩阵中持久配置。Ask 使用独立工具 allowlist，但模型与 effort 继承 Normal；Plan 继续使用独立模型、effort 和调查工具 allowlist。
 
 ## 要求
 
@@ -61,78 +61,103 @@ pi update --extensions
 
 ## 工具 Profile 矩阵
 
-从 **0.5.0** 开始，`/only-tools` 不再区分“当前会话禁用”和“永久禁用”。工具策略只有一个持久化来源：
+工具策略只有一个持久化来源：
 
 ```text
 ~/.pi/agent/tools.json
 ```
 
-界面转置为 **Normal / Plan 作为列，Model / Effort / Tool 作为行**：
-
-```text
-                    Normal                  Plan
-Model               provider/model          provider/model
-Effort              high                    xhigh
-read                ●                       ●
-bash                ●                       ○
-grep                ○                       ●
-...                 ...                     ...
-```
-
-在 Pi TUI 中执行：
+执行：
 
 ```text
 /only-tools
 ```
 
+界面以 **Normal / Ask / Plan 为列，Model / Effort / Tool 为行**：
+
+```text
+                    Normal              Ask                 Plan
+Model               provider/model      inherit Normal      provider/model
+Effort              high                inherit Normal      xhigh
+read                ●                   ●                   ●
+shell_command       ●                   ◇                   ○
+web_fetch           ○                   ●                   ●
+plan_write          ◇                   ◇                   ◆
+...                 ...                 ...                 ...
+```
+
 操作：
 
 - `↑ / ↓`：选择 Model / Effort / 某个工具行；
-- `← / →`：选择 Normal / Plan 列；
-- `Enter`：Model 行选择模型、Effort 行选择 effort、工具行切换允许状态；
+- `← / →`：选择 Normal / Ask / Plan 列；
+- `Enter`：Normal/Plan 的 Model 或 Effort 行打开选择器；工具行切换允许状态；
 - `Space`：在工具行切换允许状态；
-- `M`：直接配置当前列的模型；
-- `E / T`：直接配置当前列的 effort（底层仍映射到 Pi thinking level）；
-- `A`：当前 Profile 全选可注册工具；
+- `M`：配置当前 Normal/Plan 列的模型；
+- `E / T`：配置当前 Normal/Plan 列的 effort；
+- `A`：当前 Profile 全选可配置且已注册的工具；
 - `N`：当前 Profile 清空；
 - `R`：恢复当前 Profile 的默认值；
 - `Esc / S`：保存并关闭。
 
-Normal 与 Plan 的模型/effort 都在同一界面编辑；选择 inherit 时继承 Pi 当前/default。工具单元格使用更醒目的 `●` / `○` 表示允许/不允许；锁定的控制工具使用 `◆` / `◇`，`?` 表示工具当前未注册。工具较多时列表会纵向滚动。
+工具单元格使用 `●` / `○` 表示允许/不允许；锁定单元格使用 `◆` / `◇`，`?` 表示工具当前未注册。Ask 的 Model 和 Effort 固定继承 Normal，因此对应单元格不可单独编辑。
 
-### 模式切换快捷键
+### Ask 工具策略
 
-在 Pi TUI 主界面按 `Shift+Tab`，按固定顺序循环：
+Ask 列就是 Ask Mode 的持久权限来源，不再从 Plan 列推导。用户可以在这里启用核心读取工具以及确认只读的第三方/MCP 工具。
 
-- Normal → Ask：进入严格只读问答模式；
-- Ask → Plan：进入 Plan Mode；
-- Plan / Ready → Normal：退出 Plan Mode 并恢复 Normal；
-- 已批准计划正在执行、因而不能重新进入 Plan 时，Ask → Normal，不会把快捷键困在 Ask；
+以下已知命令、编辑和工作流控制工具在 Ask 列中始终锁定关闭，即使旧配置包含它们也会在迁移时清理：
+
+```text
+shell_command
+apply_patch
+bash
+powershell
+edit
+write
+EnterPlanMode
+plan_write
+ExitPlanMode
+```
+
+Pi 的通用 ToolDefinition 当前没有统一的只读元数据，所以第三方/MCP 工具由用户在 Ask 列中显式授权。应只启用读取、搜索、列出、获取和检查类操作。Ask Mode 仍会在运行时把 active tools 切换到该 allowlist，并在 `tool_call` 阶段再次拦截集合外调用。
+
+### 模式选择与快捷键
+
+统一使用：
+
+```text
+/mode
+```
+
+命令会弹出以下三个选项：
+
+```text
+Normal
+Ask
+Plan
+```
+
+选择后立即切换对应模式。无需 `/ask`、`/ask on`、`/ask off` 等独立命令。
+
+在 Pi TUI 主界面按 `Shift+Tab`，仍可按固定顺序循环：
+
+- Normal → Ask；
+- Ask → Plan；
+- Plan / Ready → Normal；
+- 已批准计划正在执行、因而不能重新进入 Plan 时，Ask → Normal；
 - Agent 正在运行时不会中途切换，会提示等待当前 turn 结束。
 
-Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后会优先消费这个按键作为 Normal → Ask → Plan → Normal 的模式循环；thinking/effort 可以直接在 `/only-tools` 的 Effort 行配置，或者把 Pi 的 `app.thinking.cycle` 重新绑定到其他按键。
+Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后会优先消费该按键作为模式循环；thinking/effort 可以在 `/only-tools` 中配置，或者把 Pi 的 `app.thinking.cycle` 重新绑定到其他按键。
 
 ### Profile 语义
 
-- `normal`：普通会话以及批准计划后的执行阶段共同使用的持久工具 allowlist、模型和思考强度。
-- `ask`：运行时只读 Profile。只允许 Plan 列中已启用且名称精确匹配 `read`、`grep`、`find`、`ls`、`ask_user_question` 的已注册工具；`shell_command`、`apply_patch`、写入工具以及无法可靠判定只读性的自定义/MCP 工具默认全部禁用。Ask 沿用 Normal 的模型和 effort。
-- `plan`：Plan Mode 的持久调查工具 allowlist；`plan_write` 在表格中锁定为必选。
+- `normal`：普通会话以及批准计划后的执行阶段使用的持久工具 allowlist、模型和思考强度。
+- `ask`：严格只读问答模式，使用 Ask 列的持久工具 allowlist，并继承 Normal 的模型和 effort。
+- `plan`：Plan Mode 的持久调查工具 allowlist、模型和 effort；`plan_write` 锁定为必选。
 
-Ask Mode 同时做两层限制：先把模型可见工具切换为只读集合，再在 `tool_call` 阶段拦截任何集合外调用。系统提示词会明确标记 `[ASK MODE ACTIVE]`，禁止编辑文件、修改 Git/配置/依赖、运行 shell/build/test 或执行既有计划。
+Ask Mode 会注入 `[ASK MODE ACTIVE]` 系统约束，明确禁止编辑文件、修改 Git/配置/依赖、运行 shell/build/test、操作服务或执行既有计划。工具被选入 Ask allowlist 只代表模型可见，并不解除只读约束。
 
-可直接使用：
-
-```text
-/ask
-/ask on 分析当前实现
-/ask status
-/ask config
-/ask off
-```
-
-`/ask config` 打开统一 Profile 矩阵；Ask 的核心读取工具来源于 Plan 列，但仍会经过上述精确只读过滤。
-
-`EnterPlanMode` 只允许出现在 Normal；`plan_write` 只允许出现在 Plan。`ExitPlanMode` 不再注册或暴露给模型，旧配置中的同名项会在加载和迁移时清理。控制工具在不合法的 Profile 中显示为锁定关闭。
+`EnterPlanMode` 只允许出现在 Normal；`plan_write` 只允许出现在 Plan。`ExitPlanMode` 不再注册或暴露给模型，旧配置中的同名项会在加载和迁移时清理。
 
 配置保存后立即更新当前 active profile，同时把 Normal 中启用的 Pi 内置工具同步到官方 `settings.json.defaultTools`，使下次启动的内置工具状态与矩阵一致。
 
@@ -147,9 +172,17 @@ Ask Mode 同时做两层限制：先把模型可见工具切换为只读集合�
 }
 ```
 
-会在首次启动时自动迁移为 version 3：原永久禁用项会从 Normal 与 Plan 两个 Profile 的 allowlist 中移除，同时清理旧版 `ExitPlanMode` 配置。迁移后不再存在全局 denylist，也不再保存旧版 session tool 配置状态；Ask 的当前开关会单独按 session branch 保存，以便切换会话树时恢复正确模式。
+以及 version 2/3 的 Normal/Plan 配置都会自动迁移为 version 4：
 
-原 `claude-plan-mode.json` 中的 `execution` 模型与思考强度会自动作为新的 Normal 配置读取；旧的 Plan tool 列表只用于首次生成 Plan 行默认值，之后工具矩阵以 `tools.json` 为唯一真相。项目级 Plan 配置不再覆盖这个全局矩阵。
+- 保留 Normal 与 Plan allowlist；
+- 新增持久 Ask allowlist，默认启用核心读取工具；
+- 清理旧版 `ExitPlanMode`；
+- 清理 Ask 中已知的命令/编辑工具；
+- 原永久禁用项会从所有 Profile 中移除。
+
+Ask 的当前开关会按 session branch 保存，以便切换会话树时恢复正确模式。
+
+原 `claude-plan-mode.json` 中的 `execution` 模型与思考强度会作为 Normal 配置读取；旧的 Plan tool 列表只用于首次生成 Plan 默认值，之后工具矩阵以 `tools.json` 为唯一真相。
 
 查看运行时最终工具：
 
@@ -161,7 +194,7 @@ Ask Mode 同时做两层限制：先把模型可见工具切换为只读集合�
 
 ```text
 normal
-  └─ EnterPlanMode / /plan
+  └─ /mode → Plan 或 EnterPlanMode / /plan
        └─ plan
             └─ valid plan_write
                  └─ ready（用户审核）
@@ -196,7 +229,7 @@ normal
 /plan-approve clear
 ```
 
-`/plan config` 与 `/only-tools plan` 都直接打开同一个 Profile 矩阵，不再存在第二套 Plan 工具配置界面。
+`/plan config` 与 `/only-tools` 打开同一个 Profile 矩阵，不再存在第二套 Plan 工具配置界面。
 
 已安装独立 `pi-claude-plan-mode` 的用户仍应卸载旧 package，避免重复注册 Plan workflow。
 
@@ -333,8 +366,8 @@ Pi 的全局工具展开快捷键仍负责展开当前保留的 TUI 预览；超
 
 1. Pi 按自己的 `defaultTools`、项目设置和 CLI 参数决定初始工具集。
 2. `shell_command` 与 `apply_patch` 按普通 extension tool 注册。
-3. 使用 `/only-tools` 统一管理 Normal / Plan 的持久工具矩阵。
-4. 使用 `Shift+Tab` 在 Normal、Ask、Plan 三种模式之间切换；Ask 只开放经精确校验的读取工具。
+3. 使用 `/only-tools` 统一管理 Normal / Ask / Plan 的持久工具矩阵。
+4. 使用 `/mode` 直接选择模式，或使用 `Shift+Tab` 循环 Normal → Ask → Plan → Normal。
 5. 需要恢复 0.1.0 的近似效果时，在 Normal 列中禁用不需要的内置工具；其他扩展工具仍按 Pi 的正常规则保留。
 
 旧版没有创建工具选择配置文件；早期 0.2.0 开发包若产生了 `~/.pi/agent/pi-only-tools.json`，新版不会再读取它，可以安全删除。
@@ -344,6 +377,7 @@ Pi 的全局工具展开快捷键仍负责展开当前保留的 TUI 预览；超
 - Extension 与 shell 命令拥有当前用户权限。
 - `shell_command` 可以执行任意命令。
 - `apply_patch` 是本机命令，不由本插件提供或沙箱化。
-- Ask Mode 会从模型可见工具中移除 `shell_command`、`apply_patch` 和未知工具，并再次拦截集合外 `tool_call`；它不是操作系统沙箱，也不约束用户手动执行的命令。
+- Ask Mode 会移除已知命令/编辑工具，并再次拦截 Ask allowlist 之外的 `tool_call`；第三方/MCP 工具的只读属性由用户在 `/only-tools` 中显式配置。
+- Ask Mode 不是操作系统沙箱，也不约束用户手动执行的命令。
 - 工具启用设置只改变模型可见的工具集，不构成操作系统安全边界。
 - 安装前应审查 `src/entry.js`、`src/codex-shell-command.js`、`src/index.js` 或 `dist/index.js`。
