@@ -4,7 +4,6 @@ import {
   ASK_MODE_STATE_ENTRY,
   ASK_MODE_STATE_VERSION,
   ASK_MODE_STATUS_KEY,
-  buildAskSystemPrompt,
   buildAskTools,
 } from "./ask-mode-policy.js";
 
@@ -320,15 +319,6 @@ export function registerAskMode(pi, options) {
     removeShiftTabListener?.();
     removeShiftTabListener = undefined;
     ctx.ui.setStatus(ASK_MODE_STATUS_KEY, undefined);
-  });
-
-  pi.on("before_agent_start", (event) => {
-    if (!isActive()) return;
-    toolProfiles.apply();
-    const tools = toolProfiles.getEffectiveTools(ASK_MODE_PROFILE);
-    return {
-      systemPrompt: `${event.systemPrompt}\n\n${buildAskSystemPrompt(tools)}`,
-    };
   });
 
   pi.on("tool_call", (event) => {

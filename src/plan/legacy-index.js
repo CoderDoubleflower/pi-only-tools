@@ -860,8 +860,8 @@ export function registerClaudePlanMode(pi, options = {}) {
         pi.sendMessage({
             customType: PLAN_CONTINUE_MESSAGE,
             content: `Continue planning the user's request in Plan Mode using the configured tools (${toolSummary}). ` +
-                `Maintain the canonical plan at ${state.plan.path} with ${PLAN_WRITE_TOOL} according to the final plan content contract, ` +
-                `and call ${EXIT_PLAN_MODE_TOOL} alone when the plan is complete and unambiguous.`,
+                `Maintain the canonical plan at ${state.plan.path} with ${PLAN_WRITE_TOOL} according to the final plan content contract. ` +
+                `Publish the complete plan with ${PLAN_WRITE_TOOL} when it is ready; a valid plan_write ends the planning turn automatically.`,
             display: false,
             details: { planId: state.plan.id, revision: state.plan.revision },
         }, { triggerTurn: true });
@@ -871,9 +871,11 @@ export function registerClaudePlanMode(pi, options = {}) {
         await restoreBranchRuntime(ctx, previousState);
     });
     pi.on("before_agent_start", (event, _ctx) => {
-        if (!state)
+        // The integrated pi-only-tools runtime installs one cache-stable
+        // protocol and injects dynamic state through the context hook. Keep
+        // the legacy prompt path only for standalone Plan Mode consumers.
+        if (!state || toolProfiles)
             return;
-        toolProfiles?.apply();
         const names = allToolNames();
         const planningTools = activePlanningTools(state, names);
         const modePrompt = state.stage === "planning"
@@ -899,7 +901,7 @@ export function registerClaudePlanMode(pi, options = {}) {
             approved: undefined,
             lastFeedback: event.text.trim() || undefined,
         }, ctx);
-        ctx.ui.notify("User feedback reopened Plan Mode. Revise the plan and call ExitPlanMode again.", "info");
+        ctx.ui.notify("User feedback reopened Plan Mode. Revise and republish the complete plan with plan_write.", "info");
     });
     pi.on("tool_call", (event, ctx) => {
         if ((event.toolName === ENTER_PLAN_MODE_TOOL || event.toolName === EXIT_PLAN_MODE_TOOL) &&

@@ -70,7 +70,16 @@ assert.equal(setActiveToolsCalls, 0, "loading the plugin must not force an activ
 assert.deepEqual(__test.ONLY_TOOLS, ["shell_command", "apply_patch"]);
 assert.ok(commands.has("only-tools"));
 assert.ok(commands.has("pi-only-tools"));
-assert.deepEqual([...handlers.keys()], ["tool_result", "session_start", "session_tree", "before_agent_start"]);
+assert.deepEqual([...handlers.keys()], [
+  "tool_result",
+  "session_start",
+  "session_tree",
+  "input",
+  "before_agent_start",
+  "context",
+  "tool_call",
+  "before_provider_request",
+]);
 assert.deepEqual(__test.getBuiltinTools(pi).map((tool) => tool.name), ["bash", "edit", "read", "write"]);
 assert.equal(__test.getGlobalSettingsPath(), path.join(agentDir, "settings.json"));
 assert.deepEqual(__test.normalizeToolNameList([" read ", "bash", "read", "", null]), ["read", "bash"]);

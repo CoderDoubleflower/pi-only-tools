@@ -1,4 +1,5 @@
 import { registerAskMode } from "../ask-mode.js";
+import { registerCacheStableModeRuntime } from "../cache-stable-mode.js";
 import { createPlanToolUiExtensionApi } from "../plan-tool-ui.js";
 import {
   registerClaudePlanMode as registerLegacyClaudePlanMode,
@@ -112,7 +113,7 @@ export function registerClaudePlanMode(pi, options = {}) {
   });
   bridge.setCommandInterceptor(askMode.prepareForPlanCommand);
 
-  return {
+  const integratedMode = {
     ...legacyMode,
     async applySavedConfiguration(ctx) {
       await legacyMode.applySavedConfiguration?.(ctx);
@@ -129,6 +130,13 @@ export function registerClaudePlanMode(pi, options = {}) {
     getMode: askMode.getMode,
     leaveAskMode: askMode.leave,
   };
+
+  registerCacheStableModeRuntime(decoratedPi, {
+    toolProfiles: options.toolProfiles,
+    getPlanMode: () => integratedMode,
+  });
+
+  return integratedMode;
 }
 
 export default function claudePlanModeExtension(pi) {
