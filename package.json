@@ -1,7 +1,7 @@
 {
   "name": "pi-only-tools",
   "version": "0.5.3",
-  "description": "Codex-style shell and patch tools with unified Normal, Ask, and Plan modes.",
+  "description": "Codex-style shell and patch tools with cache-stable Normal, Ask, and Plan modes.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -14,7 +14,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "find src -name '*.js' -print0 | xargs -0 -n1 node --check && node --check dist/index.js",
-    "test": "node test/test.mjs && node test/render-lines.test.mjs && node test/entry-registration.test.mjs && node test/plan-store.test.mjs && node test/plan-render.test.mjs && node test/plan-review-dispatch.test.mjs && node test/codex-shell-command.test.mjs && node test/tool-profile-controller.test.mjs && node test/ask-mode.test.mjs && node test/plan-integration.test.mjs && node test/profile-config.test.mjs && node test/profile-matrix.test.mjs",
+    "test": "node test/test.mjs && node test/render-lines.test.mjs && node test/entry-registration.test.mjs && node test/plan-store.test.mjs && node test/plan-render.test.mjs && node test/plan-review-dispatch.test.mjs && node test/codex-shell-command.test.mjs && node test/mode-cache-policy.test.mjs && node test/tool-profile-controller.test.mjs && node test/ask-mode.test.mjs && node test/plan-integration.test.mjs && node test/profile-config.test.mjs && node test/profile-matrix.test.mjs",
     "prepack": "npm run build && npm run check"
   },
   "peerDependencies": {
@@ -35,7 +35,8 @@
     "coding-agent",
     "ask-mode",
     "plan-mode",
-    "tool-profiles"
+    "tool-profiles",
+    "prompt-cache"
   ],
   "license": "MIT",
   "pi": {
