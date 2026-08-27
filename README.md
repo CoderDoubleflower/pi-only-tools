@@ -1,79 +1,143 @@
 # pi-only-tools
 
-一个面向 Pi coding agent 的统一工具策略 package：既提供 Codex 风格基础工具，也统一管理 Normal、Ask 与 Plan 三种运行模式。有效的计划由 `plan_write` 直接发布给用户审核，只有用户选择执行后才切回 Normal 开始实现。
+`pi-only-tools` 是一个面向 Pi coding agent 的统一工具与模式策略 package：
 
-- `shell_command`
-- `apply_patch`
-
-两个工具使用紧凑的终端渲染：调用行显示为 `Bash(...)` / `Update(...)`，结果使用 `⎿` 前缀，长输出默认折叠，文件修改显示增删行统计和带行号的 diff。
-
-Normal、Ask、Plan 三个工具 Profile 都在 `/only-tools` 的同一张矩阵中持久配置。Ask 使用独立工具 allowlist，但模型与 effort 继承 Normal；Plan 继续使用独立模型、effort 和调查工具 allowlist。
+- 提供 Codex 风格的 `shell_command` 与 `apply_patch`；
+- 用同一张 `/only-tools` 矩阵管理 Normal、Ask、Plan；
+- 用 `/mode` 或 `Shift+Tab` 在三种模式之间切换；
+- 通过稳定工具目录、动态权限策略和固定模式协议，避免模式切换反复破坏 provider prompt cache；
+- 由 `plan_write` 发布可审核的 canonical plan，只有用户明确批准后才进入实现阶段。
 
 ## 要求
 
-- Pi `0.84.2` 或更新版本
-- Node.js `22.19.0`+
-- 本机 PATH 中存在可直接执行的 `apply_patch` 命令
+- Pi `0.84.2` 或更新版本；
+- Node.js `22.19.0`+；
+- 本机 `PATH` 中存在可执行的 `apply_patch`。
 
-检查命令：
+检查：
 
 ```bash
 command -v apply_patch
 ```
 
-`apply_patch` 不在 PATH 中时，可指定绝对路径：
+需要指定绝对路径时：
 
 ```bash
 export PI_ONLY_TOOLS_APPLY_PATCH_COMMAND=/absolute/path/to/apply_patch
 ```
 
-## 安装
+## 安装与更新
 
-直接从 GitHub 全局安装：
+全局安装：
 
 ```bash
 pi install git:github.com/CoderDoubleflower/pi-only-tools
 ```
 
-也可以使用完整的 HTTPS 地址：
-
-```bash
-pi install https://github.com/CoderDoubleflower/pi-only-tools
-```
-
-如需仅在当前项目中启用，进入项目目录后执行：
+仅当前项目：
 
 ```bash
 pi install -l git:github.com/CoderDoubleflower/pi-only-tools
 ```
 
-更新已安装的 package：
-
-```bash
-pi update --extensions
-```
-
-安装或升级后，重启 Pi 或执行：
+更新后重启 Pi，或执行：
 
 ```text
 /reload
 ```
 
-## 工具 Profile 矩阵
+已安装独立 `pi-claude-plan-mode` 的用户应卸载旧 package，避免重复注册 Plan workflow。
 
-工具策略只有一个持久化来源：
+## 缓存稳定的工具策略
+
+### 稳定 Tool Catalog
+
+Normal、Ask、Plan 的工具配置仍然是三个独立 allowlist，但它们不再等同于 provider 请求中的完整 `tools` 数组。
+
+每个 session 会建立一个稳定 Tool Catalog：
+
+```text
+Normal tools ∪ Ask tools ∪ Plan tools
+```
+
+目录按 Pi 的工具注册顺序排列。模式切换只改变当前允许调用的工具，不会因为 Normal → Ask → Plan 而删除、重排或重新生成工具定义。因此 Pi 不需要在每次模式切换时用不同的 active tools 重建 system prompt。
+
+在同一 session 中：
+
+- 从 Profile 中移除工具，只会立即撤销调用权限；工具定义会保留在稳定目录中，直到新 session；
+- 新启用且已经注册的工具会追加到目录末尾，不会重排既有前缀；
+- 新 session 会根据当前配置重新建立目录，已不再使用的工具会自然消失。
+
+`ToolProfileController` 仍保留 `dynamic-catalog` 兼容策略供独立调用者使用；package 默认使用 `stable-catalog`。
+
+### 运行时权限门
+
+真正的权限边界是统一的 `tool_call` gate，而不是模型是否看见某个工具：
+
+- Normal：只允许 Normal Profile；
+- Ask：只允许 Ask Profile，并继续执行 Ask 的只读约束；
+- Plan / planning：只允许 Plan Profile 与 `plan_write`；
+- Plan / ready：禁止模型调用任何工具，等待用户审核；
+- approved execution：回到 Normal Profile。
+
+原 Ask 与 Plan 的专用拦截仍保留，作为第二层防御。
+
+### OpenAI Responses
+
+对于官方 OpenAI Responses provider，插件保留完整、稳定的 `payload.tools`，仅按当前 Profile设置：
+
+```text
+tool_choice = allowed_tools(...)
+```
+
+Plan 已发布、等待审核时使用：
+
+```text
+tool_choice = none
+```
+
+未知 OpenAI 兼容层和其他 provider 不会被强行改写；它们仍依赖固定模式协议与运行时 `tool_call` gate。
+
+### 固定模式协议与隐藏状态
+
+Normal、Ask、Plan 现在共享同一份固定 system mode protocol。以下动态信息不再写入 system prompt：
+
+- 当前模式与 Plan stage；
+- 当前工具 allowlist；
+- canonical plan 路径；
+- revision 与 SHA-256；
+- approved revision/hash。
+
+这些信息会写入隐藏的 `[PI ONLY TOOLS MODE STATE v1]` 消息。状态使用稳定 fingerprint；只有模式、权限或计划状态实际变化时才追加一次。发生 compaction 或 session tree 切换后会强制重新发送一次，避免状态消息被摘要掉。
+
+查看当前策略：
+
+```text
+/only-tools status
+```
+
+输出中的关键字段：
+
+- `cacheStrategy`：当前目录策略；
+- `catalogTools`：实际发送给 provider 的稳定工具目录；
+- `allowedTools`：当前模式真正允许调用的工具；
+- `requested` / `effective`：三个 Profile 的配置与当前可用结果。
+
+## Profile 矩阵
+
+配置文件：
 
 ```text
 ~/.pi/agent/tools.json
 ```
 
-执行：
+打开矩阵：
 
 ```text
 /only-tools
 ```
 
-界面以 **Normal / Ask / Plan 为列，Model / Effort / Tool 为行**：
+界面以 Normal / Ask / Plan 为列，以 Model / Effort / Tool 为行：
 
 ```text
                     Normal              Ask                 Plan
@@ -83,29 +147,25 @@ read                ●                   ●                   ●
 shell_command       ●                   ◇                   ○
 web_fetch           ○                   ●                   ●
 plan_write          ◇                   ◇                   ◆
-...                 ...                 ...                 ...
 ```
 
 操作：
 
-- `↑ / ↓`：选择 Model / Effort / 某个工具行；
-- `← / →`：选择 Normal / Ask / Plan 列；
-- `Enter`：Normal/Plan 的 Model 或 Effort 行打开选择器；工具行切换允许状态；
-- `Space`：在工具行切换允许状态；
-- `M`：配置当前 Normal/Plan 列的模型；
-- `E / T`：配置当前 Normal/Plan 列的 effort；
-- `A`：当前 Profile 全选可配置且已注册的工具；
-- `N`：当前 Profile 清空；
-- `R`：恢复当前 Profile 的默认值；
+- `↑ / ↓`：选择行；
+- `← / →`：选择 Profile；
+- `Enter / Space`：编辑当前单元格；
+- `M`：选择模型；
+- `E / T`：选择 effort；
+- `A`：全选当前 Profile 中可配置且已注册的工具；
+- `N`：清空当前 Profile；
+- `R`：恢复默认值；
 - `Esc / S`：保存并关闭。
 
-工具单元格使用 `●` / `○` 表示允许/不允许；锁定单元格使用 `◆` / `◇`，`?` 表示工具当前未注册。Ask 的 Model 和 Effort 固定继承 Normal，因此对应单元格不可单独编辑。
+工具单元格使用 `●` / `○`；锁定单元格使用 `◆` / `◇`；`?` 表示工具当前未注册。Ask 的模型与 effort 固定继承 Normal。
 
-### Ask 工具策略
+### Ask Profile
 
-Ask 列就是 Ask Mode 的持久权限来源，不再从 Plan 列推导。用户可以在这里启用核心读取工具以及确认只读的第三方/MCP 工具。
-
-以下已知命令、编辑和工作流控制工具在 Ask 列中始终锁定关闭，即使旧配置包含它们也会在迁移时清理：
+Ask 是显式只读 allowlist。核心读取工具和确认只读的第三方/MCP 工具可以启用；以下已知命令、编辑与工作流控制工具始终锁定关闭：
 
 ```text
 shell_command
@@ -119,123 +179,71 @@ plan_write
 ExitPlanMode
 ```
 
-Pi 的通用 ToolDefinition 当前没有统一的只读元数据，所以第三方/MCP 工具由用户在 Ask 列中显式授权。应只启用读取、搜索、列出、获取和检查类操作。Ask Mode 仍会在运行时把 active tools 切换到该 allowlist，并在 `tool_call` 阶段再次拦截集合外调用。
+Pi 的通用 ToolDefinition 没有统一的只读元数据，因此第三方/MCP 工具仍需用户判断。只应在 Ask 中启用读取、搜索、列出、获取和检查类操作。
 
-### 模式选择与快捷键
+### Profile 语义
 
-统一使用：
+- `normal`：普通会话与批准计划后的执行阶段；
+- `ask`：严格只读问答模式，模型与 effort 继承 Normal；
+- `plan`：调查与规划模式，可配置独立模型、effort 与调查工具；`plan_write` 锁定必选。
+
+`EnterPlanMode` 只允许出现在 Normal；`plan_write` 只允许出现在 Plan。`ExitPlanMode` 不注册、不暴露给模型，旧配置中的同名项会在迁移时清理。
+
+保存矩阵后，Normal 中启用的 Pi 内置工具仍会同步到官方 `settings.json.defaultTools`，确保下次启动的默认配置一致。
+
+## 模式切换
+
+选择模式：
 
 ```text
 /mode
 ```
 
-命令会弹出以下三个选项：
+TUI 中按 `Shift+Tab`：
 
 ```text
-Normal
-Ask
-Plan
+Normal → Ask → Plan → Normal
 ```
 
-选择后立即切换对应模式。无需 `/ask`、`/ask on`、`/ask off` 等独立命令。
+Agent 正在运行时不会中途切换；需要等待当前 turn 结束。Pi 默认将 `Shift+Tab` 用于 thinking-level cycle，启用本 package 后该按键优先用于模式切换。
 
-在 Pi TUI 主界面按 `Shift+Tab`，仍可按固定顺序循环：
-
-- Normal → Ask；
-- Ask → Plan；
-- Plan / Ready → Normal；
-- 已批准计划正在执行、因而不能重新进入 Plan 时，Ask → Normal；
-- Agent 正在运行时不会中途切换，会提示等待当前 turn 结束。
-
-Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后会优先消费该按键作为模式循环；thinking/effort 可以在 `/only-tools` 中配置，或者把 Pi 的 `app.thinking.cycle` 重新绑定到其他按键。
-
-### Profile 语义
-
-- `normal`：普通会话以及批准计划后的执行阶段使用的持久工具 allowlist、模型和思考强度。
-- `ask`：严格只读问答模式，使用 Ask 列的持久工具 allowlist，并继承 Normal 的模型和 effort。
-- `plan`：Plan Mode 的持久调查工具 allowlist、模型和 effort；`plan_write` 锁定为必选。
-
-Ask Mode 会注入 `[ASK MODE ACTIVE]` 系统约束，明确禁止编辑文件、修改 Git/配置/依赖、运行 shell/build/test、操作服务或执行既有计划。工具被选入 Ask allowlist 只代表模型可见，并不解除只读约束。
-
-`EnterPlanMode` 只允许出现在 Normal；`plan_write` 只允许出现在 Plan。`ExitPlanMode` 不再注册或暴露给模型，旧配置中的同名项会在加载和迁移时清理。
-
-配置保存后立即更新当前 active profile，同时把 Normal 中启用的 Pi 内置工具同步到官方 `settings.json.defaultTools`，使下次启动的内置工具状态与矩阵一致。
-
-### 旧配置迁移
-
-旧版 `tools.json`：
-
-```json
-{
-  "version": 1,
-  "permanentlyDisabledTools": ["example"]
-}
-```
-
-以及 version 2/3 的 Normal/Plan 配置都会自动迁移为 version 4：
-
-- 保留 Normal 与 Plan allowlist；
-- 新增持久 Ask allowlist，默认启用核心读取工具；
-- 清理旧版 `ExitPlanMode`；
-- 清理 Ask 中已知的命令/编辑工具；
-- 原永久禁用项会从所有 Profile 中移除。
-
-Ask 的当前开关会按 session branch 保存，以便切换会话树时恢复正确模式。
-
-原 `claude-plan-mode.json` 中的 `execution` 模型与思考强度会作为 Normal 配置读取；旧的 Plan tool 列表只用于首次生成 Plan 默认值，之后工具矩阵以 `tools.json` 为唯一真相。
-
-查看运行时最终工具：
-
-```text
-/only-tools status
-```
-
-### Plan workflow
+## Plan workflow
 
 ```text
 normal
-  └─ /mode → Plan 或 EnterPlanMode / /plan
-       └─ plan
+  └─ /mode → Plan，或 EnterPlanMode / /plan
+       └─ planning
             └─ valid plan_write
                  └─ ready（用户审核）
-                      ├─ 执行计划（保留上下文） → normal / executing
-                      ├─ 新会话执行             → normal / executing
-                      ├─ 编辑 / 反馈             → plan
-                      └─ 稍后处理                → ready
-                           └─ /plan-approve
+                      ├─ 当前上下文执行 → normal / executing
+                      ├─ 新会话执行     → normal / executing
+                      ├─ 编辑 / 反馈     → planning
+                      └─ 稍后处理       → ready
 ```
 
-有效的 `plan_write` 会完成以下动作：
+有效的 `plan_write` 会：
 
-1. 原子写入完整 canonical plan，并固定 revision 与 SHA-256；
-2. 通过结构和占位符检查后进入 `ready`；
-3. 在当前工具结果中用 Pi Markdown 渲染计划正文；
-4. 终止本轮 planning turn，并打开用户审核菜单。
+1. 原子写入完整 canonical plan；
+2. 固定 revision 与 SHA-256；
+3. 按语义结构检查计划；
+4. 在工具结果中用 Pi Markdown 显示一次完整正文；
+5. 进入 `ready` 并打开用户审核菜单；
+6. 终止当前 planning turn。
 
-计划正文只在 `plan_write` 阶段完整显示一次。用户批准属于内部状态动作，不会形成可见工具调用；执行 handoff 对模型可见，但在 TUI transcript 中隐藏，因此不会重复打印计划。
+计划必须包含一个结果导向的 H1，以及按顺序排列的四个必需 H2：背景/目标、已验证的当前状态、有序实施步骤、验证。只有真实存在迁移、兼容、恢复、并发或回滚问题时，才允许增加第五个 H2。
 
-交互菜单提供：
-
-- 在当前上下文执行；
-- 清空上下文并在新会话执行；
-- 编辑计划；
-- 提供反馈并继续规划；
-- 稍后审核。
-
-非交互模式可以使用：
+非交互模式可使用：
 
 ```text
 /plan-approve keep
 /plan-approve clear
 ```
 
-`/plan config` 与 `/only-tools` 打开同一个 Profile 矩阵，不再存在第二套 Plan 工具配置界面。
-
-已安装独立 `pi-claude-plan-mode` 的用户仍应卸载旧 package，避免重复注册 Plan workflow。
+`/plan config` 与 `/only-tools` 打开同一个矩阵。
 
 ## `shell_command`
 
-执行一次同步 shell 命令：
+示例：
 
 ```json
 {
@@ -245,40 +253,17 @@ normal
 }
 ```
 
-参数：
+- Unix 使用 `$SHELL -lc`，缺省回退到 `/bin/bash`；
+- Windows 使用 `cmd.exe /d /s /c`；
+- 支持流式输出、超时和 AbortSignal；
+- 普通默认超时 `10000 ms`；
+- 可通过 `PI_ONLY_TOOLS_SHELL` 覆盖 Unix shell。
 
-- `command`：必填，shell 命令。
-- `workdir`：可选。相对路径以当前 Pi cwd 为基准。
-- `timeout_ms`：可选，默认 `10000` 毫秒。
-
-行为：
-
-- Unix 默认通过 `$SHELL -lc` 执行；没有 `$SHELL` 时使用 `/bin/bash`。
-- Windows 使用 `cmd.exe /d /s /c`。
-- 支持流式输出、超时和 AbortSignal 中断。
-- stdout、stderr 分开渲染；stderr 和非零退出状态使用错误色。
-- 默认每个输出区块展示 3 行；只多 1 行时直接展示第 4 行，否则显示 `… +N lines (ctrl+o to expand)`。
-
-### 与 Codex 对齐的输出限制
-
-`shell_command` 使用与当前 Codex 原生 `shell_command` 相同的两层限制：
-
-1. 捕获层分别保留 stdout 和 stderr 的前 `1 MiB`；即使达到上限，仍继续读取到 EOF，避免子进程因管道背压卡住。
-2. stdout 与 stderr 聚合后再次限制为 `1 MiB`。两者竞争空间时，先为 stdout 保留三分之一、stderr 保留三分之二，再把 stderr 未使用的空间返还给 stdout。
-3. 返回模型前按 `10,000` 个近似 token 截断；估算规则与 Codex 一致，为约 `4 bytes/token`。
-4. 截断保留输出开头和结尾，并在中间插入 `…N tokens truncated…`，同时返回退出码、运行时间和原输出行数。
-
-因此，单次工具结果的模型正文通常约为 `40 KB`，不会再把接近 `400,000` 字符的内容直接写入上下文。最终 session `details` 只保存有界的 TUI 预览和字节统计，不再重复保存完整的 stdout、stderr 与 combined output；流式更新同样只发送小型预览。
-
-覆盖 Unix shell：
-
-```bash
-export PI_ONLY_TOOLS_SHELL=/bin/zsh
-```
+工具结果采用有界捕获与模型输出截断：长 stdout/stderr 不会无上限写入 session 或上下文，TUI 默认只显示紧凑预览，可用 Pi 的全局工具展开快捷键查看当前保留内容。
 
 ## `apply_patch`
 
-把完整 patch 通过 stdin 传给本机 `apply_patch` 命令：
+示例：
 
 ```json
 {
@@ -288,13 +273,7 @@ export PI_ONLY_TOOLS_SHELL=/bin/zsh
 }
 ```
 
-参数：
-
-- `patch`：必填，必须包含 `*** Begin Patch` / `*** End Patch`。
-- `workdir`：可选。相对路径以当前 Pi cwd 为基准。
-- `timeout_ms`：可选，默认 `120000` 毫秒。
-
-支持识别：
+支持：
 
 ```text
 *** Add File:
@@ -303,19 +282,20 @@ export PI_ONLY_TOOLS_SHELL=/bin/zsh
 *** Move to:
 ```
 
-执行前后，插件会读取涉及的文本文件并计算真实差异，因此 UI 中的 `Added N lines, removed N lines` 不是只依赖 patch 文本估算。单文件超过 2 MiB、二进制文件或过大的 diff 会回退到简化统计。
+执行前后会读取相关文本文件并计算真实差异；二进制文件、超大文件或过大的 diff 会回退到简化统计。
 
-## 工具渲染
+常见字段别名会在 schema 校验前规范化：
 
-命令：
+- `shell_command`：`cmd` → `command`，`cwd` → `workdir`，`timeout` 秒 → `timeout_ms`；
+- `apply_patch`：`input` / `patch_text` / `patchText` / `command` → `patch`，`cwd` → `workdir`，`timeout` 秒 → `timeout_ms`。
+
+## 渲染
 
 ```text
 Bash(git status --short)
   ⎿  M src/index.ts
      ?? test/new.test.ts
 ```
-
-文件修改：
 
 ```text
 Update(src/index.ts)
@@ -324,60 +304,30 @@ Update(src/index.ts)
        10 +const enabled = true;
 ```
 
-计划：
-
 ```text
 Write Plan(User-controlled Plan review)
   ⎿  Plan r3 saved · 4 steps · awaiting your review
-
-     # User-controlled Plan review
-     ...
 ```
 
-计划正文由 Pi Markdown 渲染，不会把整个文档套成灰色 `toolOutput`；标题、列表、行内代码和代码块使用对应的语义样式。
+计划正文使用 Pi Markdown 语义样式，不会整体套成灰色 tool output。
 
-折叠输出：
+## 旧配置迁移
 
-```text
-  ⎿  first line
-     second line
-     third line
-     … +12 lines (ctrl+o to expand)
-```
+version 1 的 `permanentlyDisabledTools` 与 version 2/3 的 Normal/Plan 配置会迁移到 version 4：
 
-Pi 的全局工具展开快捷键仍负责展开当前保留的 TUI 预览；超出 Codex 捕获与预览限制的内容不会写入 session。
+- 保留 Normal 与 Plan allowlist；
+- 新增持久 Ask allowlist；
+- 清理 `ExitPlanMode`；
+- 清理 Ask 中已知的命令/编辑工具；
+- 原永久禁用项会从所有 Profile 中移除。
 
-## 参数兼容
-
-为了兼容部分模型或代理产生的常见字段，插件在 schema 校验前接受以下别名：
-
-- `shell_command`: `cmd` → `command`, `cwd` → `workdir`, `timeout`（秒）→ `timeout_ms`
-- `apply_patch`: `input` / `patch_text` / `patchText` / `command` → `patch`, `cwd` → `workdir`, `timeout`（秒）→ `timeout_ms`
-
-模型侧正式 schema 仍只显示规范字段。
-
-## 升级说明
-
-0.1.0 会反复把 active tools 强制改成两个插件工具，并阻止其他工具调用。0.2.0 已删除这两项行为。
-
-0.3.0 合并了原独立 `/tools` 扩展的能力。升级后应删除 `~/.pi/agent/extensions/tools.ts`，避免两个扩展同时恢复和覆盖 active tools。原扩展写入的 `~/.pi/agent/tools.json` 和 session `tools-config` entry 会自动沿用。
-
-升级后：
-
-1. Pi 按自己的 `defaultTools`、项目设置和 CLI 参数决定初始工具集。
-2. `shell_command` 与 `apply_patch` 按普通 extension tool 注册。
-3. 使用 `/only-tools` 统一管理 Normal / Ask / Plan 的持久工具矩阵。
-4. 使用 `/mode` 直接选择模式，或使用 `Shift+Tab` 循环 Normal → Ask → Plan → Normal。
-5. 需要恢复 0.1.0 的近似效果时，在 Normal 列中禁用不需要的内置工具；其他扩展工具仍按 Pi 的正常规则保留。
-
-旧版没有创建工具选择配置文件；早期 0.2.0 开发包若产生了 `~/.pi/agent/pi-only-tools.json`，新版不会再读取它，可以安全删除。
+原 `claude-plan-mode.json` 的 execution 模型与 effort 会迁移为 Normal；旧 Plan tools 只用于首次默认值，之后以 `tools.json` 为唯一工具配置来源。
 
 ## 安全说明
 
-- Extension 与 shell 命令拥有当前用户权限。
-- `shell_command` 可以执行任意命令。
-- `apply_patch` 是本机命令，不由本插件提供或沙箱化。
-- Ask Mode 会移除已知命令/编辑工具，并再次拦截 Ask allowlist 之外的 `tool_call`；第三方/MCP 工具的只读属性由用户在 `/only-tools` 中显式配置。
-- Ask Mode 不是操作系统沙箱，也不约束用户手动执行的命令。
-- 工具启用设置只改变模型可见的工具集，不构成操作系统安全边界。
-- 安装前应审查 `src/entry.js`、`src/codex-shell-command.js`、`src/index.js` 或 `dist/index.js`。
+- Extension 与 shell 命令拥有当前用户权限；
+- `shell_command` 可以执行任意命令；
+- `apply_patch` 是本机命令，本插件不提供沙箱；
+- Ask/Plan/Normal 的运行时 gate 控制模型工具调用，但不是操作系统安全边界；
+- 第三方/MCP 工具的只读属性由用户显式判断；
+- 安装前应审查源码，尤其是 `src/index.js`、`src/tool-profile-controller.js` 与 `src/mode-cache-policy.js`。
