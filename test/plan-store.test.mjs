@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MODE_PROTOCOL_PROMPT } from "../src/mode-cache-policy.js";
 import {
   buildInitialPlan,
   countPlanSteps,
@@ -109,10 +110,11 @@ const planningPrompt = buildPlanningSystemPrompt(
   ["read", "grep", "plan_write"],
   false,
 );
-assert.match(planningPrompt, /language used by the user's current request/i);
-assert.match(planningPrompt, /Do not retain English template headings/i);
+assert.equal(planningPrompt, MODE_PROTOCOL_PROMPT);
+assert.match(planningPrompt, /language of the user's current request/i);
 assert.match(planningPrompt, /exactly four required H2 sections/i);
-assert.doesNotMatch(planningPrompt, /required `## Context` section/);
+assert.doesNotMatch(planningPrompt, /\/tmp\/plan\.md|abc123|plan_revision: 3/);
+assert.doesNotMatch(planningPrompt, /configured Plan tool allowlist is/);
 
 const root = await mkdtemp(join(tmpdir(), "plan-store-v2-"));
 try {
@@ -124,4 +126,4 @@ try {
   await rm(root, { recursive: true, force: true });
 }
 
-console.log("plan store quality tests passed");
+console.log("plan store quality and cache-stable prompt tests passed");
