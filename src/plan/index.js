@@ -1,8 +1,32 @@
 import { registerAskMode } from "../ask-mode.js";
+import { buildAskModeContext } from "../ask-mode-policy.js";
+import {
+  buildModeSystemPrompt,
+  buildNormalModeContext,
+  createModeContextMessage,
+} from "../mode-prompt.js";
+import {
+  applyOpenAIAllowedTools,
+  supportsOpenAIAllowedTools,
+} from "../provider-tool-policy.js";
 import { createPlanToolUiExtensionApi } from "../plan-tool-ui.js";
 import {
   registerClaudePlanMode as registerLegacyClaudePlanMode,
 } from "./legacy-index.js";
+import {
+  ASK_USER_QUESTION_TOOL,
+  LEGACY_EXIT_PLAN_MODE_TOOL,
+} from "./constants.js";
+import {
+  buildExecutionModeContext,
+  buildPlanningModeContext,
+  buildReadyModeContext,
+  disableLegacyModeSystemPrompts,
+} from "./prompts.js";
+import {
+  buildPlanningTools,
+  getEffectivePlanningToolSelection,
+} from "./tool-set.js";
 
 export * from "./config.js";
 export * from "./config-ui.js";
@@ -81,10 +105,172 @@ function createPlanRuntimeBridge(pi) {
   };
 }
 
+function orderedAvailableTools(pi, values) {
+  const requested = new Set(values ?? []);
+  const result = [];
+  const seen = new Set();
+  for (const tool of pi.getAllTools?.() ?? []) {
+    const name = tool?.name;
+    if (typeof name !== "string" || seen.has(name) || !requested.has(name)) continue;
+    seen.add(name);
+    result.push(name);
+  }
+  return result;
+}
+
+function buildRuntimeSnapshot(pi, legacyMode, askMode, toolProfiles) {
+  const state = legacyMode.getState?.();
+  const stage = state?.stage ?? "idle";
+  const allNames = new Set(
+    (pi.getAllTools?.() ?? [])
+      .map((tool) => tool?.name)
+      .filter((name) => typeof name === "string" && name.length > 0),
+  );
+
+  if (stage === "planning") {
+    const requested = toolProfiles
+      ? toolProfiles.getEffectiveTools("plan")
+      : state?.planningTools ?? [];
+    const selected = getEffectivePlanningToolSelection(requested, allNames);
+    const allowedTools = orderedAvailableTools(
+      pi,
+      buildPlanningTools(selected, allNames),
+    );
+    return {
+      mode: "plan",
+      stage,
+      allowedTools,
+      content: buildPlanningModeContext(
+        state,
+        allowedTools,
+        allowedTools.includes(ASK_USER_QUESTION_TOOL),
+      ),
+    };
+  }
+
+  if (stage === "ready") {
+    return {
+      mode: "plan",
+      stage,
+      allowedTools: [],
+      content: buildReadyModeContext(state),
+    };
+  }
+
+  if (stage === "executing") {
+    const requested = toolProfiles
+      ? toolProfiles.getEffectiveTools("normal")
+      : state?.executionTools ?? state?.baseline?.tools ?? pi.getActiveTools?.() ?? [];
+    const allowedTools = orderedAvailableTools(pi, requested);
+    return {
+      mode: "normal",
+      stage,
+      allowedTools,
+      content: buildExecutionModeContext(state, allowedTools),
+    };
+  }
+
+  if (askMode?.isActive?.()) {
+    const allowedTools = orderedAvailableTools(
+      pi,
+      toolProfiles?.getEffectiveTools("ask") ?? askMode.getAllowedTools?.() ?? [],
+    );
+    return {
+      mode: "ask",
+      stage: "ask",
+      allowedTools,
+      content: buildAskModeContext(allowedTools),
+    };
+  }
+
+  const allowedTools = orderedAvailableTools(
+    pi,
+    toolProfiles?.getEffectiveTools("normal") ?? pi.getActiveTools?.() ?? [],
+  );
+  return {
+    mode: "normal",
+    stage: "normal",
+    allowedTools,
+    content: buildNormalModeContext(allowedTools),
+  };
+}
+
+function modeBlockReason(snapshot, toolName) {
+  if (toolName === LEGACY_EXIT_PLAN_MODE_TOOL && ["planning", "ready"].includes(snapshot.stage)) {
+    return "Plan approval is user-controlled; ExitPlanMode is unavailable to the model.";
+  }
+  if (snapshot.stage === "ready") {
+    return `Plan Ready blocks ${toolName}. The published plan is awaiting user review and no tools are allowed.`;
+  }
+  const label = snapshot.mode === "ask" ? "Ask Mode" : snapshot.mode === "plan" ? "Plan Mode" : "Normal profile";
+  return `${label} blocks ${toolName}. Allowed tools: ${snapshot.allowedTools.join(", ") || "none"}.`;
+}
+
+function registerRuntimeModePolicy(pi, legacyMode, askMode, toolProfiles) {
+  let lastContextFingerprint;
+  const resetContext = () => {
+    lastContextFingerprint = undefined;
+  };
+
+  pi.on("session_start", resetContext);
+  pi.on("session_tree", resetContext);
+  pi.on("session_compact", resetContext);
+
+  pi.on("before_agent_start", (event) => {
+    toolProfiles?.syncCatalog?.();
+    const snapshot = buildRuntimeSnapshot(pi, legacyMode, askMode, toolProfiles);
+    const fingerprint = JSON.stringify({
+      mode: snapshot.mode,
+      stage: snapshot.stage,
+      allowedTools: snapshot.allowedTools,
+      content: snapshot.content,
+    });
+    const protocol = buildModeSystemPrompt();
+    const systemPrompt = event.systemPrompt.includes("[PI ONLY TOOLS MODE PROTOCOL]")
+      ? event.systemPrompt
+      : `${event.systemPrompt}\n\n${protocol}`;
+    if (fingerprint === lastContextFingerprint) return { systemPrompt };
+    lastContextFingerprint = fingerprint;
+    return {
+      systemPrompt,
+      message: createModeContextMessage(snapshot, fingerprint),
+    };
+  });
+
+  pi.on("tool_call", (event) => {
+    const snapshot = buildRuntimeSnapshot(pi, legacyMode, askMode, toolProfiles);
+    if (snapshot.allowedTools.includes(event.toolName)) return;
+    return {
+      block: true,
+      reason: modeBlockReason(snapshot, event.toolName),
+    };
+  });
+
+  pi.on("before_provider_request", (event, ctx) => {
+    if (!supportsOpenAIAllowedTools(ctx.model)) return;
+    const snapshot = buildRuntimeSnapshot(pi, legacyMode, askMode, toolProfiles);
+    return applyOpenAIAllowedTools(event.payload, snapshot.allowedTools);
+  });
+
+  return {
+    getAllowedTools: () =>
+      buildRuntimeSnapshot(pi, legacyMode, askMode, toolProfiles).allowedTools,
+    getSnapshot: () => buildRuntimeSnapshot(pi, legacyMode, askMode, toolProfiles),
+    resetContext,
+  };
+}
+
 export function registerClaudePlanMode(pi, options = {}) {
+  disableLegacyModeSystemPrompts();
   const decoratedPi = createPlanToolUiExtensionApi(pi);
   if (!options.toolProfiles) {
-    return registerLegacyClaudePlanMode(decoratedPi, options);
+    const legacyMode = registerLegacyClaudePlanMode(decoratedPi, options);
+    const modePolicy = registerRuntimeModePolicy(decoratedPi, legacyMode, undefined, undefined);
+    return {
+      ...legacyMode,
+      getAllowedTools: modePolicy.getAllowedTools,
+      getModeSnapshot: modePolicy.getSnapshot,
+    };
   }
 
   const bridge = createPlanRuntimeBridge(decoratedPi);
@@ -110,6 +296,12 @@ export function registerClaudePlanMode(pi, options = {}) {
     planMode: planActions,
     openConfig: legacyMode.openConfig,
   });
+  const modePolicy = registerRuntimeModePolicy(
+    decoratedPi,
+    legacyMode,
+    askMode,
+    options.toolProfiles,
+  );
   bridge.setCommandInterceptor(askMode.prepareForPlanCommand);
 
   return {
@@ -117,16 +309,22 @@ export function registerClaudePlanMode(pi, options = {}) {
     async applySavedConfiguration(ctx) {
       await legacyMode.applySavedConfiguration?.(ctx);
       await askMode.applySavedConfiguration(ctx);
+      modePolicy.resetContext();
     },
     async openConfig(ctx) {
       const result = await legacyMode.openConfig(ctx);
-      if (result?.saved) await askMode.applySavedConfiguration(ctx);
+      if (result?.saved) {
+        await askMode.applySavedConfiguration(ctx);
+        modePolicy.resetContext();
+      }
       return result;
     },
     cycleMode: askMode.cycle,
     enterAskMode: askMode.enter,
+    getAllowedTools: modePolicy.getAllowedTools,
     getAskState: askMode.getState,
     getMode: askMode.getMode,
+    getModeSnapshot: modePolicy.getSnapshot,
     leaveAskMode: askMode.leave,
   };
 }
@@ -136,6 +334,10 @@ export default function claudePlanModeExtension(pi) {
 }
 
 export const __test = {
+  buildRuntimeSnapshot,
   createPlanRuntimeBridge,
+  modeBlockReason,
+  orderedAvailableTools,
+  registerRuntimeModePolicy,
   suppressTerminalInputContext,
 };
