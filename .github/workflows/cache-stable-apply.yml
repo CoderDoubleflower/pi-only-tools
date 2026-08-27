@@ -1,0 +1,59 @@
+name: Apply cache-stable mode patch
+
+on:
+  push:
+    branches:
+      - fix/cache-stable-openai-responses
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the patch branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Reconstruct and apply the cache-stable patch
+        shell: bash
+        run: |
+          cat .github/cache-stable/chunk* \
+            | base64 --decode \
+            | xz --decompress --stdout \
+            > /tmp/apply-pi-only-tools-cache-stable.py
+          python3 -m py_compile /tmp/apply-pi-only-tools-cache-stable.py
+          python3 /tmp/apply-pi-only-tools-cache-stable.py . --force-ref --run-tests
+
+      - name: Build, check, and validate the diff
+        shell: bash
+        run: |
+          npm run build
+          npm run check
+          git diff --check
+
+      - name: Commit the verified implementation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src test README.md CHANGELOG.md package.json
+          if git diff --cached --quiet; then
+            echo "The patch produced no implementation changes." >&2
+            exit 1
+          fi
+          git commit -m "fix: keep mode tools cache-stable"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
