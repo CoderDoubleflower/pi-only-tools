@@ -149,6 +149,15 @@ profiles.setProfile(
   { apply: false },
 );
 profiles.activate("normal");
+const stableCatalog = [
+  "shell_command",
+  "apply_patch",
+  "read",
+  "ask_user_question",
+  "EnterPlanMode",
+  "plan_write",
+];
+assert.deepEqual(activeTools, stableCatalog);
 assert.equal(plan.enabled, true);
 assert.equal(plan.getMode(), "normal");
 assert.deepEqual([...tools.keys()].sort(), ["EnterPlanMode", "plan_write"].sort());
@@ -165,6 +174,11 @@ async function emit(event, payload = {}) {
   return result;
 }
 
+async function runtimeState(messages = [{ role: "user", content: "test", timestamp: 1 }]) {
+  const result = await emit("context", { messages });
+  return result.messages.at(-1);
+}
+
 async function waitForMode(mode) {
   for (let i = 0; i < 50 && plan.getMode() !== mode; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -179,11 +193,15 @@ const terminalInputHandler = [...terminalInputHandlers][0];
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
 await waitForMode("ask");
 assert.equal(profiles.mode, "ask");
-assert.deepEqual(activeTools, ["read", "ask_user_question"]);
+assert.deepEqual(activeTools, stableCatalog);
 let promptResult = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(promptResult.systemPrompt, /\[ASK MODE ACTIVE\]/);
+assert.match(promptResult.systemPrompt, /PI-ONLY-TOOLS MODE PROTOCOL/);
 assert.match(promptResult.systemPrompt, /strictly read-only/);
-assert.doesNotMatch(promptResult.systemPrompt, /shell_command/);
+assert.doesNotMatch(promptResult.systemPrompt, /"mode": "ask"/);
+let stateMessage = await runtimeState();
+assert.match(stateMessage.content, /"mode": "ask"/);
+assert.match(stateMessage.content, /"read"/);
+assert.doesNotMatch(stateMessage.content, /"shell_command"/);
 const blockedEdit = await emit("tool_call", { toolName: "apply_patch" });
 assert.equal(blockedEdit.block, true);
 assert.match(blockedEdit.reason, /Ask Mode blocks apply_patch/);
@@ -192,25 +210,30 @@ assert.equal(await emit("tool_call", { toolName: "read" }), undefined);
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
 await waitForMode("plan");
 assert.equal(profiles.mode, "plan");
-assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
+assert.deepEqual(activeTools, stableCatalog);
 
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
 await waitForMode("normal");
 assert.equal(profiles.mode, "normal");
-assert.deepEqual(activeTools, ["shell_command", "apply_patch", "EnterPlanMode"]);
+assert.deepEqual(activeTools, stableCatalog);
 
 await commands.get("plan").handler("on Inspect the review workflow", ctx);
 assert.equal(profiles.mode, "plan");
 assert.equal(plan.getMode(), "plan");
-assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
+assert.deepEqual(activeTools, stableCatalog);
 assert.equal(ctx.model.provider, "planner");
 assert.equal(thinkingLevel, "high");
 
 promptResult = await emit("before_agent_start", { systemPrompt: "base" });
 assert.match(promptResult.systemPrompt, /Repository reconnaissance/);
-assert.match(promptResult.systemPrompt, /Current State/);
+assert.match(promptResult.systemPrompt, /verified current state/i);
+assert.doesNotMatch(promptResult.systemPrompt, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 assert.doesNotMatch(promptResult.systemPrompt, /ExitPlanMode/);
-assert.match(promptResult.systemPrompt, /do not call any exit/i);
+stateMessage = await runtimeState();
+assert.match(stateMessage.content, /"mode": "plan"/);
+assert.match(stateMessage.content, /"workflowStage": "planning"/);
+assert.match(stateMessage.content, /"canonicalPlan"/);
+assert.match(stateMessage.content, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
 const invalidResult = await tools.get("plan_write").execute(
   "invalid",
@@ -265,7 +288,10 @@ assert.equal(validResult.details.readiness.ready, true);
 assert.doesNotMatch(validResult.content[0].text, /# Make Plan approval/);
 assert.equal(entries.filter((entry) => entry.customType === PLAN_STATE_ENTRY).at(-1).data.stage, "ready");
 assert.equal(profiles.mode, "plan");
-assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
+assert.deepEqual(activeTools, stableCatalog);
+stateMessage = await runtimeState();
+assert.match(stateMessage.content, /"workflowStage": "ready"/);
+assert.match(stateMessage.content, /"allowedTools": \[\]/);
 
 await emit("agent_settled");
 await Promise.all(pendingDispatches);
@@ -280,7 +306,7 @@ assert.match(blockedExit.reason, /user-controlled/);
 await commands.get("plan-approve").handler("keep", ctx);
 assert.equal(plan.getStage(), "executing");
 assert.equal(profiles.mode, "normal");
-assert.deepEqual(activeTools, ["shell_command", "apply_patch", "EnterPlanMode"]);
+assert.deepEqual(activeTools, stableCatalog);
 assert.equal(ctx.model.provider, "normal");
 assert.equal(thinkingLevel, "xhigh");
 const handoff = sentMessages.find((entry) => entry.message?.customType === "claude-plan-mode-handoff");
@@ -291,8 +317,9 @@ assert.match(handoff.message.content, /<approved-plan/);
 await commands.get("plan").handler("finish", ctx);
 assert.equal(plan.getStage(), "idle");
 assert.equal(profiles.mode, "normal");
+assert.deepEqual(activeTools, stableCatalog);
 
 await emit("session_shutdown");
 assert.equal(terminalInputHandlers.size, 0);
 await rm(root, { recursive: true, force: true });
-console.log("Normal/Ask/Plan workflow integration tests passed");
+console.log("Normal/Ask/Plan cache-stable workflow integration tests passed");

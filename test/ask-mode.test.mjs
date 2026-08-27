@@ -69,6 +69,7 @@ const registered = new Set([
   "plan_write",
 ]);
 let activeTools = ["shell_command", "apply_patch"];
+let setActiveToolsCalls = 0;
 let planStage = "idle";
 
 const pi = {
@@ -83,6 +84,7 @@ const pi = {
   getAllTools: () => [...registered].map((name) => ({ name })),
   getActiveTools: () => [...activeTools],
   setActiveTools(names) {
+    setActiveToolsCalls += 1;
     activeTools = [...names];
   },
   appendEntry(customType, data) {
@@ -109,6 +111,18 @@ profiles.setProfile(
   { apply: false },
 );
 profiles.activate("normal");
+const stableCatalog = [
+  "shell_command",
+  "apply_patch",
+  "read",
+  "grep",
+  "web_fetch",
+  "mcp__github__get_file_contents",
+  "ask_user_question",
+  "plan_write",
+];
+assert.deepEqual(activeTools, stableCatalog);
+assert.equal(setActiveToolsCalls, 1);
 
 const ctx = {
   mode: "tui",
@@ -183,18 +197,16 @@ assert.equal(modePrompts.length, 1);
 assert.deepEqual(modePrompts[0].choices, ["Normal", "Ask", "Plan"]);
 assert.equal(modes.getMode(), "ask");
 assert.equal(profiles.snapshot().mode, "ask");
-assert.deepEqual(activeTools, [
+assert.deepEqual(activeTools, stableCatalog, "Ask mode must keep the provider-visible catalog stable");
+assert.equal(setActiveToolsCalls, 1);
+assert.deepEqual(profiles.getEffectiveTools("ask"), [
   "read",
   "web_fetch",
   "mcp__github__get_file_contents",
 ]);
 
 const prompt = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(prompt.systemPrompt, /\[ASK MODE ACTIVE\]/);
-assert.match(prompt.systemPrompt, /strictly read-only/);
-assert.match(prompt.systemPrompt, /Ask Profile configured in \/only-tools/);
-assert.match(prompt.systemPrompt, /web_fetch/);
-assert.doesNotMatch(prompt.systemPrompt, /shell_command/);
+assert.equal(prompt, undefined, "Ask mode must not append a mode-specific dynamic system prompt");
 assert.equal(await emit("tool_call", { toolName: "web_fetch" }), undefined);
 const blocked = await emit("tool_call", { toolName: "apply_patch" });
 assert.equal(blocked.block, true);
@@ -205,12 +217,15 @@ await commands.get("mode").handler("", ctx);
 assert.equal(modes.getMode(), "plan");
 assert.equal(planStage, "planning");
 assert.equal(profiles.snapshot().mode, "plan");
+assert.deepEqual(activeTools, stableCatalog);
+assert.equal(setActiveToolsCalls, 1);
 
 modeChoices.push("Normal");
 await commands.get("mode").handler("", ctx);
 assert.equal(modes.getMode(), "normal");
 assert.equal(planStage, "idle");
 assert.equal(profiles.snapshot().mode, "normal");
+assert.deepEqual(activeTools, stableCatalog);
 
 assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
 await waitFor(() => modes.getMode() === "ask");
@@ -222,7 +237,8 @@ await waitFor(() => modes.getMode() === "normal");
 await modes.setMode("ask", ctx, { notify: false });
 profiles.setProfile("ask", ["grep", "ask_user_question"], { apply: false });
 await modes.applySavedConfiguration(ctx);
-assert.deepEqual(activeTools, ["grep", "ask_user_question"]);
+assert.deepEqual(activeTools, stableCatalog);
+assert.deepEqual(profiles.getEffectiveTools("ask"), ["grep", "ask_user_question"]);
 
 planStage = "executing";
 assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
@@ -230,7 +246,8 @@ await waitFor(() => notifications.some((entry) => entry.message.includes("switch
 assert.equal(modes.getMode(), "normal");
 assert.equal(planStage, "executing");
 assert.equal(profiles.snapshot().mode, "normal");
+assert.deepEqual(activeTools, stableCatalog);
 
 await emit("session_shutdown", { reason: "quit" });
 assert.equal(terminalHandlers.size, 0);
-console.log("Ask Mode /mode selector, policy, and cycle tests passed");
+console.log("Ask Mode cache-stable selector, policy, and cycle tests passed");

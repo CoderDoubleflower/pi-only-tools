@@ -119,7 +119,7 @@ plan_write
 ExitPlanMode
 ```
 
-Pi 的通用 ToolDefinition 当前没有统一的只读元数据，所以第三方/MCP 工具由用户在 Ask 列中显式授权。应只启用读取、搜索、列出、获取和检查类操作。Ask Mode 仍会在运行时把 active tools 切换到该 allowlist，并在 `tool_call` 阶段再次拦截集合外调用。
+Pi 的通用 ToolDefinition 当前没有统一的只读元数据，所以第三方/MCP 工具由用户在 Ask 列中显式授权。应只启用读取、搜索、列出、获取和检查类操作。三种模式共享一个会话内稳定的 provider-visible 工具目录；切换 Ask 只更新当前 allowlist，不再删除或重排 active tools。实际权限由 fail-closed `tool_call` gate 强制执行，Ask 自身的拦截仍作为 defense in depth。OpenAI Responses 请求还会用 `allowed_tools` 或 `none` 限制模型可选择的工具。
 
 ### 模式选择与快捷键
 
@@ -155,11 +155,30 @@ Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后
 - `ask`：严格只读问答模式，使用 Ask 列的持久工具 allowlist，并继承 Normal 的模型和 effort。
 - `plan`：Plan Mode 的持久调查工具 allowlist、模型和 effort；`plan_write` 锁定为必选。
 
-Ask Mode 会注入 `[ASK MODE ACTIVE]` 系统约束，明确禁止编辑文件、修改 Git/配置/依赖、运行 shell/build/test、操作服务或执行既有计划。工具被选入 Ask allowlist 只代表模型可见，并不解除只读约束。
+插件只注入一个固定的 `[PI-ONLY-TOOLS MODE PROTOCOL v1]` system suffix，Ask 的只读约束和 Plan 的流程约束都位于这个稳定前缀中。当前 `mode`、`workflowStage`、`allowedTools` 以及计划 revision/hash 通过 `context` hook 作为末尾隐藏 custom message 在每次 provider call 前临时加入；它不会写入 session history，也不会改写 system prompt。工具被选入 allowlist 只代表当前可调用，任何越权调用仍会被运行时阻止。
 
 `EnterPlanMode` 只允许出现在 Normal；`plan_write` 只允许出现在 Plan。`ExitPlanMode` 不再注册或暴露给模型，旧配置中的同名项会在加载和迁移时清理。
 
-配置保存后立即更新当前 active profile，同时把 Normal 中启用的 Pi 内置工具同步到官方 `settings.json.defaultTools`，使下次启动的内置工具状态与矩阵一致。
+配置保存后立即更新当前 profile allowlist。会话内工具目录只增不减：新增已注册工具按 Pi registry order 追加；取消勾选只关闭权限，目录项保留到 `/reload`、新会话或 extension 重载，避免缓存前缀因删除或重排失效。Normal 中启用的 Pi 内置工具仍同步到官方 `settings.json.defaultTools`，使下次启动的内置工具状态与矩阵一致。
+
+### Prompt cache 稳定性
+
+`pi-only-tools` 将“模型看到的工具目录”和“当前允许执行的工具”分开管理：
+
+- `catalogTools`：Normal、Ask、Plan 三个 Profile 与工作流必需工具的稳定并集，按 Pi tool registry 顺序排列；
+- `allowedTools`：当前模式的实际权限集合；
+- `activeTools`：Pi 当前实际暴露给 provider 的目录，正常情况下与 `catalogTools` 相同。
+
+模式切换只改变 `allowedTools` 和末尾的临时 runtime-state message，不再改写 `tools` 数组或 mode-specific system prompt。配置新增工具时会在目录末尾追加一次；取消工具、切换模式或更新 Plan revision 不会缩短或重排目录。执行 `/reload`、进入新会话或重载 extension 时会基于最新配置重新建立目录。
+
+对所有 `api=openai-responses` 请求，无论 provider 名称，插件都会保留完整 `tools` 数组，并把当前子集写入 `tool_choice.allowed_tools`；无可用工具时使用 `tool_choice: "none"`。只有确实不支持该字段的兼容网关才需要显式关闭：
+
+```bash
+# 禁用 payload 级 allowed_tools，只保留固定协议与运行时 gate
+export PI_ONLY_TOOLS_ALLOWED_TOOLS=off
+```
+
+`allowed_tools` 是模型侧约束；真正的权限边界始终是 fail-closed `tool_call` gate。
 
 ### 旧配置迁移
 
@@ -184,7 +203,7 @@ Ask 的当前开关会按 session branch 保存，以便切换会话树时恢复
 
 原 `claude-plan-mode.json` 中的 `execution` 模型与思考强度会作为 Normal 配置读取；旧的 Plan tool 列表只用于首次生成 Plan 默认值，之后工具矩阵以 `tools.json` 为唯一真相。
 
-查看运行时最终工具：
+查看运行时的 `allowedTools`、稳定 `catalogTools` 与 Pi 实际 `activeTools`：
 
 ```text
 /only-tools status

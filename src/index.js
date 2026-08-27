@@ -6,6 +6,7 @@ import path from "node:path";
 import { Type } from "typebox";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { registerCacheStableModeRuntime } from "./cache-stable-mode.js";
 import { createToolProfileController } from "./tool-profile-controller.js";
 import { registerClaudePlanMode } from "./plan/index.js";
 import { loadPlanModeConfig } from "./plan/config.js";
@@ -1031,7 +1032,7 @@ export default function piOnlyTools(pi) {
     },
   });
 
-  const toolProfiles = createToolProfileController(pi);
+  const toolProfiles = createToolProfileController(pi, { requiredTools: PLAN_REQUIRED_TOOLS });
 
   let loadedProfileConfig;
   let planMode;
@@ -1070,9 +1071,6 @@ export default function piOnlyTools(pi) {
 
   pi.on?.("session_start", async (_event, ctx) => restoreToolState(ctx));
   pi.on?.("session_tree", async (_event, ctx) => restoreToolState(ctx));
-  pi.on?.("before_agent_start", async () => {
-    toolProfiles.apply();
-  });
 
   const openUnifiedSettings = async (ctx) => {
     const defaults = loadedProfileConfig?.profiles ?? getProfileDefaults(ctx);
@@ -1117,6 +1115,13 @@ export default function piOnlyTools(pi) {
       };
 
 
+  if (!supportsPlanModeRuntime) {
+    registerCacheStableModeRuntime(pi, {
+      toolProfiles,
+      getPlanMode: () => planMode,
+    });
+  }
+
   const openSettings = async (args, ctx) => {
     const requested = args.trim().toLowerCase();
     if (requested === "status") {
@@ -1132,7 +1137,7 @@ export default function piOnlyTools(pi) {
   };
 
   pi.registerCommand("only-tools", {
-    description: "Manage the persistent Normal/Plan tool matrix",
+    description: "Manage the persistent Normal/Ask/Plan tool matrix",
     handler: async (args, ctx) => openSettings(args, ctx),
   });
   pi.registerCommand("pi-only-tools", {

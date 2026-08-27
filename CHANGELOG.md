@@ -2,13 +2,19 @@
 
 ## Unreleased
 
+- Keep one provider-visible tool catalog for the extension/session lifetime; Normal, Ask, and Plan now change runtime allowlists instead of replacing the `tools` array.
+- Preserve catalog prefix order across mode switches and permission removals; newly enabled registered tools append in Pi registry order and the catalog is rebuilt only after reload/session replacement.
+- Replace mode-specific dynamic system-prompt rewrites with one fixed mode protocol plus an ephemeral `context` runtime-state message that is not persisted to the session tree.
+- Enforce the active allowlist fail-closed in every mode, including Normal and Plan-ready, while keeping the existing Ask/Plan checks as defense in depth.
+- Constrain every `api=openai-responses` request with `tool_choice.allowed_tools` or `none` without provider-name filtering or rewriting `tools`; retain `PI_ONLY_TOOLS_ALLOWED_TOOLS=off` for incompatible gateways.
+- Add cache-stability tests covering catalog monotonicity, runtime-state replacement, provider payload rewriting, and the Normal/Ask/Plan workflow.
 - Keep Ask and Plan footer statuses in the same leading plugin-status slot by using distinct keys with one shared fixed sort prefix.
 - Add a persistent Ask tool profile beside Normal and Plan in `/only-tools`; Ask model and effort inherit Normal.
 - Add one `/mode` selector for Normal, Ask, and Plan, and remove the separate `/ask` command family.
 - Keep Shift+Tab as one global mode cycle: Normal → Ask → Plan → Normal, while preserving the idle-only switching guard.
 - Make the Ask column an explicit user-maintained allowlist for read-only third-party/MCP tools while locking known shell, edit, write, patch, and Plan-control tools off.
-- Enforce Ask permissions both through the active tool set and a second `tool_call` allowlist check.
-- Inject an explicit `[ASK MODE ACTIVE]` system contract that forbids file, Git, dependency, service, command, build, and test side effects.
+- Enforce Ask permissions through the shared runtime allowlist gate and retain the Ask-specific `tool_call` check as defense in depth.
+- Move Ask read-only behavior into the fixed mode protocol; the ephemeral runtime-state message carries the active mode and allowed tool names.
 - Upgrade profile configuration to version 4 and migrate existing Normal/Plan files with a safe default Ask profile.
 - Stream the growing `plan_write.content` Markdown in the TUI while tool arguments are generated, without writing partial content to the canonical plan file.
 - Make visible plan titles, headings, step labels, and prose follow the user's language; validate localized plans by semantic H2 order while preserving legacy English plans.
