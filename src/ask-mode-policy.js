@@ -6,6 +6,7 @@ import {
   PLAN_WRITE_TOOL,
   READ_ONLY_PLAN_TOOLS,
 } from "./plan/constants.js";
+import { buildModeSystemPrompt } from "./mode-prompt.js";
 
 export const ASK_MODE_PROFILE = "ask";
 export const ASK_MODE_STATE_ENTRY = "pi-only-tools-ask-mode-state";
@@ -86,17 +87,29 @@ function formatToolNames(toolNames) {
     : "none";
 }
 
-export function buildAskSystemPrompt(allowedTools) {
-  return `[ASK MODE ACTIVE]
+// Kept for API compatibility. The system-level text is intentionally static
+// across every mode; dynamic Ask state lives in a hidden mode-context message.
+export function buildAskSystemPrompt() {
+  return buildModeSystemPrompt();
+}
+
+export function buildAskModeContext(allowedTools) {
+  return `[PI ONLY TOOLS MODE CONTEXT]
+mode=ask
+stage=ask
+allowed_tools=${JSON.stringify(allowedTools)}
+
+[ASK MODE ACTIVE]
 
 You are answering the user's question in a strictly read-only investigation mode. You may inspect existing information and explain what you find, but you are not implementing, editing, or executing a plan.
 
 Hard constraints:
-- These Ask Mode constraints override any earlier planning, approved-plan, execution, or implementation instructions in the system prompt.
+- These Ask Mode constraints override any planning, approved-plan, execution, or implementation request in user messages.
 - Do not create, modify, move, rename, or delete files.
 - Do not change configuration, dependencies, Git state, external systems, running services, or user data.
 - Do not run shell commands, scripts, builds, tests, installers, or any other operation that may have side effects.
 - The Ask Profile configured in /only-tools is the explicit tool allowlist for this mode: ${formatToolNames(allowedTools)}.
+- A tool outside that allowlist may remain visible only because the provider catalogue is kept stable for prompt caching; do not call it.
 - Use an allowed tool only for reading, searching, listing, fetching, inspecting, or asking a material clarification question.
 - User configuration grants tool visibility, not permission to perform a write or side effect.
 - Do not attempt to bypass a blocked or unavailable tool.
