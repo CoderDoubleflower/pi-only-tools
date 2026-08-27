@@ -2,13 +2,19 @@
 
 ## Unreleased
 
+- Keep one append-only provider tool catalogue for the lifetime of a session; Normal, Ask, and Plan now switch runtime permissions instead of repeatedly calling `setActiveTools()` with different schemas.
+- Enforce every profile, including Normal, through a fail-closed `tool_call` gate while keeping the existing Ask and Plan policy checks as defense in depth.
+- Add an OpenAI Responses adapter that preserves the complete `tools` array and changes only `tool_choice.allowed_tools` (or `none` while a published plan awaits review).
+- Replace mode-specific dynamic system prompts with one byte-stable mode protocol shared by Normal, Ask, and Plan.
+- Move mode, stage, allowlist, canonical plan path, revision, hash, and approved revision into a hidden fingerprinted state message that is emitted only when state changes.
+- Add cache-stability regression coverage for catalogue order, mode switching, hidden state deduplication, Plan-ready tool blocking, and OpenAI Responses payload rewriting.
 - Keep Ask and Plan footer statuses in the same leading plugin-status slot by using distinct keys with one shared fixed sort prefix.
 - Add a persistent Ask tool profile beside Normal and Plan in `/only-tools`; Ask model and effort inherit Normal.
 - Add one `/mode` selector for Normal, Ask, and Plan, and remove the separate `/ask` command family.
 - Keep Shift+Tab as one global mode cycle: Normal → Ask → Plan → Normal, while preserving the idle-only switching guard.
 - Make the Ask column an explicit user-maintained allowlist for read-only third-party/MCP tools while locking known shell, edit, write, patch, and Plan-control tools off.
-- Enforce Ask permissions both through the active tool set and a second `tool_call` allowlist check.
-- Inject an explicit `[ASK MODE ACTIVE]` system contract that forbids file, Git, dependency, service, command, build, and test side effects.
+- Enforce Ask permissions through the persistent Ask allowlist plus dedicated and global `tool_call` policy checks.
+- Define the Ask read-only contract inside the shared cache-stable mode protocol, forbidding file, Git, dependency, service, command, build, and test side effects.
 - Upgrade profile configuration to version 4 and migrate existing Normal/Plan files with a safe default Ask profile.
 - Stream the growing `plan_write.content` Markdown in the TUI while tool arguments are generated, without writing partial content to the canonical plan file.
 - Make visible plan titles, headings, step labels, and prose follow the user's language; validate localized plans by semantic H2 order while preserving legacy English plans.
