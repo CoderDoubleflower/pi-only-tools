@@ -1,3 +1,4 @@
+import { MODE_PROTOCOL_PROMPT } from "./mode-cache-policy.js";
 import {
   ASK_USER_QUESTION_TOOL,
   ENTER_PLAN_MODE_TOOL,
@@ -80,33 +81,13 @@ export function isAskToolAllowed(toolName, configuredTools, allToolNames) {
   return buildAskTools(configuredTools, allToolNames).includes(toolName);
 }
 
-function formatToolNames(toolNames) {
-  return toolNames.length > 0
-    ? toolNames.map((name) => `\`${name}\``).join(", ")
-    : "none";
-}
-
-export function buildAskSystemPrompt(allowedTools) {
-  return `[ASK MODE ACTIVE]
-
-You are answering the user's question in a strictly read-only investigation mode. You may inspect existing information and explain what you find, but you are not implementing, editing, or executing a plan.
-
-Hard constraints:
-- These Ask Mode constraints override any earlier planning, approved-plan, execution, or implementation instructions in the system prompt.
-- Do not create, modify, move, rename, or delete files.
-- Do not change configuration, dependencies, Git state, external systems, running services, or user data.
-- Do not run shell commands, scripts, builds, tests, installers, or any other operation that may have side effects.
-- The Ask Profile configured in /only-tools is the explicit tool allowlist for this mode: ${formatToolNames(allowedTools)}.
-- Use an allowed tool only for reading, searching, listing, fetching, inspecting, or asking a material clarification question.
-- User configuration grants tool visibility, not permission to perform a write or side effect.
-- Do not attempt to bypass a blocked or unavailable tool.
-- Do not claim that code was changed, commands were run, or tests passed.
-
-Answering process:
-- Inspect the minimum relevant sources needed for an accurate answer.
-- Clearly distinguish verified facts from inference.
-- Answer the user's question directly and concisely after investigation.
-- You may describe possible changes, but do not apply them and do not publish an implementation plan unless the user switches to Plan Mode.`;
+/**
+ * Keep the provider-prefix system prompt byte-stable across Normal, Ask, and
+ * Plan. The active mode and allowlist are emitted separately as a hidden
+ * runtime state message by ToolProfileController.
+ */
+export function buildAskSystemPrompt(_allowedTools) {
+  return MODE_PROTOCOL_PROMPT;
 }
 
 export const __test = {
