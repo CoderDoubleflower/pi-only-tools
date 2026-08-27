@@ -90,6 +90,7 @@ export class ToolProfileController {
     this.catalogInitialized = false;
     this.lastModeStateFingerprint = undefined;
     this.forceModeStateMessage = false;
+    this.sessionRuntimePolicyInstalled = false;
 
     this.installRuntimePolicy();
   }
@@ -98,6 +99,7 @@ export class ToolProfileController {
     if (typeof this.pi.on !== "function") return;
 
     this.pi.on("session_start", async () => {
+      this.installSessionRuntimePolicy();
       // A replacement session has its own prompt-cache key. Restore the previous
       // Normal allowlist before default discovery, then build a fresh catalog for
       // the new session once configuration is loaded by the host extension.
@@ -120,14 +122,8 @@ export class ToolProfileController {
       this.forceModeStateMessage = true;
     });
 
-    this.pi.on("session_compact", async () => {
-      // Compaction may summarize away hidden custom messages even though their
-      // original entries remain in the session tree. Re-emit the state once.
-      this.lastModeStateFingerprint = undefined;
-      this.forceModeStateMessage = true;
-    });
-
     this.pi.on("before_agent_start", async (event, ctx) => {
+      this.installSessionRuntimePolicy();
       this.apply();
       const state = this.getRuntimeState(ctx);
       const fingerprint = fingerprintModeState(state.snapshot);
@@ -146,6 +142,18 @@ export class ToolProfileController {
       }
       if (messageChanged) result.message = createModeStateMessage(state.snapshot);
       return Object.keys(result).length > 0 ? result : undefined;
+    });
+  }
+
+  installSessionRuntimePolicy() {
+    if (this.sessionRuntimePolicyInstalled || typeof this.pi.on !== "function") return;
+    this.sessionRuntimePolicyInstalled = true;
+
+    this.pi.on("session_compact", async () => {
+      // Compaction may summarize away hidden custom messages even though their
+      // original entries remain in the session tree. Re-emit the state once.
+      this.lastModeStateFingerprint = undefined;
+      this.forceModeStateMessage = true;
     });
 
     this.pi.on("before_provider_request", (event, ctx) => {
