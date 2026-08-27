@@ -142,7 +142,8 @@ const eventContext = {
     },
   },
 };
-await handlers.get("session_start")[0]({}, eventContext);
+// ToolProfileController owns the first session_start hook; invoke the host profile restore hook directly.
+await handlers.get("session_start")[1]({}, eventContext);
 let migratedProfileConfig = JSON.parse(await readFile(toolsConfigPath, "utf8"));
 assert.equal(migratedProfileConfig.version, PROFILE_CONFIG_VERSION);
 assert.ok(Array.isArray(migratedProfileConfig.profiles.normal));
