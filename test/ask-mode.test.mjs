@@ -2,9 +2,19 @@ import assert from "node:assert/strict";
 import { registerAskMode } from "../src/ask-mode.js";
 import {
   ASK_MODE_STATUS_KEY,
+  buildAskModeContext,
+  buildAskSystemPrompt,
   buildAskTools,
   isAskToolConfigurable,
 } from "../src/ask-mode-policy.js";
+import {
+  buildModeSystemPrompt,
+  buildNormalModeContext,
+} from "../src/mode-prompt.js";
+import {
+  applyOpenAIAllowedTools,
+  supportsOpenAIAllowedTools,
+} from "../src/provider-tool-policy.js";
 import {
   MODE_STATUS_KEY_PREFIX,
   PLAN_STATUS_KEY,
@@ -37,6 +47,38 @@ assert.deepEqual(
   ),
   ["read", "web_fetch", "mcp__github__get_file_contents"],
 );
+
+assert.equal(buildAskSystemPrompt(), buildModeSystemPrompt());
+assert.match(buildAskModeContext(["read", "web_fetch"]), /\[ASK MODE ACTIVE\]/);
+assert.match(buildAskModeContext(["read", "web_fetch"]), /allowed_tools=\["read","web_fetch"\]/);
+assert.match(buildNormalModeContext(["shell_command"]), /mode=normal/);
+
+const responseTools = [
+  { type: "function", name: "read", description: "read" },
+  { type: "function", name: "web_fetch", description: "fetch" },
+  { type: "function", name: "apply_patch", description: "patch" },
+];
+const responsePayload = {
+  model: "gpt-5.6",
+  input: [],
+  stream: true,
+  tools: responseTools,
+};
+const restrictedPayload = applyOpenAIAllowedTools(responsePayload, ["read", "web_fetch"]);
+assert.strictEqual(restrictedPayload.tools, responseTools, "provider adapter must preserve the stable tools array");
+assert.deepEqual(restrictedPayload.tool_choice, {
+  type: "allowed_tools",
+  mode: "auto",
+  tools: [
+    { type: "function", name: "read" },
+    { type: "function", name: "web_fetch" },
+  ],
+});
+assert.equal(applyOpenAIAllowedTools(responsePayload, []).tool_choice, "none");
+assert.equal(applyOpenAIAllowedTools({ messages: [], tools: responseTools }, ["read"]), undefined);
+assert.equal(supportsOpenAIAllowedTools({ api: "openai-responses", provider: "openai" }), true);
+assert.equal(supportsOpenAIAllowedTools({ api: "openai-responses", provider: "openai-codex" }), true);
+assert.equal(supportsOpenAIAllowedTools({ api: "openai-responses", provider: "openrouter" }), false);
 
 assert.notEqual(ASK_MODE_STATUS_KEY, PLAN_STATUS_KEY);
 assert.equal(ASK_MODE_STATUS_KEY.startsWith(MODE_STATUS_KEY_PREFIX), true);
@@ -109,6 +151,17 @@ profiles.setProfile(
   { apply: false },
 );
 profiles.activate("normal");
+const initialCatalog = [
+  "shell_command",
+  "apply_patch",
+  "read",
+  "grep",
+  "web_fetch",
+  "mcp__github__get_file_contents",
+  "ask_user_question",
+  "plan_write",
+];
+assert.deepEqual(activeTools, initialCatalog);
 
 const ctx = {
   mode: "tui",
@@ -183,34 +236,26 @@ assert.equal(modePrompts.length, 1);
 assert.deepEqual(modePrompts[0].choices, ["Normal", "Ask", "Plan"]);
 assert.equal(modes.getMode(), "ask");
 assert.equal(profiles.snapshot().mode, "ask");
-assert.deepEqual(activeTools, [
+assert.deepEqual(activeTools, initialCatalog, "Ask must keep the model-facing catalogue stable");
+assert.deepEqual(modes.getAllowedTools(), [
   "read",
   "web_fetch",
   "mcp__github__get_file_contents",
 ]);
-
-const prompt = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(prompt.systemPrompt, /\[ASK MODE ACTIVE\]/);
-assert.match(prompt.systemPrompt, /strictly read-only/);
-assert.match(prompt.systemPrompt, /Ask Profile configured in \/only-tools/);
-assert.match(prompt.systemPrompt, /web_fetch/);
-assert.doesNotMatch(prompt.systemPrompt, /shell_command/);
-assert.equal(await emit("tool_call", { toolName: "web_fetch" }), undefined);
-const blocked = await emit("tool_call", { toolName: "apply_patch" });
-assert.equal(blocked.block, true);
-assert.match(blocked.reason, /Ask Mode blocks apply_patch/);
 
 modeChoices.push("Plan");
 await commands.get("mode").handler("", ctx);
 assert.equal(modes.getMode(), "plan");
 assert.equal(planStage, "planning");
 assert.equal(profiles.snapshot().mode, "plan");
+assert.deepEqual(activeTools, initialCatalog, "Plan must keep the model-facing catalogue stable");
 
 modeChoices.push("Normal");
 await commands.get("mode").handler("", ctx);
 assert.equal(modes.getMode(), "normal");
 assert.equal(planStage, "idle");
 assert.equal(profiles.snapshot().mode, "normal");
+assert.deepEqual(activeTools, initialCatalog);
 
 assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
 await waitFor(() => modes.getMode() === "ask");
@@ -222,7 +267,15 @@ await waitFor(() => modes.getMode() === "normal");
 await modes.setMode("ask", ctx, { notify: false });
 profiles.setProfile("ask", ["grep", "ask_user_question"], { apply: false });
 await modes.applySavedConfiguration(ctx);
-assert.deepEqual(activeTools, ["grep", "ask_user_question"]);
+assert.deepEqual(activeTools, [
+  "shell_command",
+  "apply_patch",
+  "read",
+  "grep",
+  "ask_user_question",
+  "plan_write",
+], "editing profile configuration may intentionally rebuild the stable catalogue");
+assert.deepEqual(modes.getAllowedTools(), ["grep", "ask_user_question"]);
 
 planStage = "executing";
 assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
@@ -233,4 +286,4 @@ assert.equal(profiles.snapshot().mode, "normal");
 
 await emit("session_shutdown", { reason: "quit" });
 assert.equal(terminalHandlers.size, 0);
-console.log("Ask Mode /mode selector, policy, and cycle tests passed");
+console.log("Ask Mode selector and stable-catalog state tests passed");
