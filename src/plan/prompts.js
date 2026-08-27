@@ -4,18 +4,19 @@ import {
   READ_ONLY_PLAN_TOOLS,
 } from "./constants.js";
 
+let legacySystemPromptsDisabled = false;
+
+export function disableLegacyModeSystemPrompts() {
+  legacySystemPromptsDisabled = true;
+}
+
 function formatToolNames(toolNames) {
   return toolNames.length > 0
     ? toolNames.map((name) => `\`${name}\``).join(", ")
     : "none";
 }
 
-export function buildPlanningSystemPrompt(
-  state,
-  allowedToolsOrHasQuestionTool,
-  maybeHasQuestionTool,
-) {
-  if (!state.plan) return "";
+function planningInputs(state, allowedToolsOrHasQuestionTool, maybeHasQuestionTool) {
   const hasQuestionTool =
     typeof allowedToolsOrHasQuestionTool === "boolean"
       ? allowedToolsOrHasQuestionTool
@@ -26,12 +27,51 @@ export function buildPlanningSystemPrompt(
           ...READ_ONLY_PLAN_TOOLS,
           ...(hasQuestionTool ? [ASK_USER_QUESTION_TOOL] : []),
         ]
-      : [...allowedToolsOrHasQuestionTool];
+      : [...(allowedToolsOrHasQuestionTool ?? [])];
+  return { allowedTools, hasQuestionTool };
+}
+
+// Compatibility entry points used by the legacy workflow hook. The integrated
+// wrapper disables them and injects one cache-stable system protocol instead.
+export function buildPlanningSystemPrompt(state, allowedToolsOrHasQuestionTool, maybeHasQuestionTool) {
+  if (legacySystemPromptsDisabled) return "";
+  return buildPlanningModeContext(state, allowedToolsOrHasQuestionTool, maybeHasQuestionTool);
+}
+
+export function buildReadySystemPrompt(state) {
+  if (legacySystemPromptsDisabled) return "";
+  return buildReadyModeContext(state);
+}
+
+export function buildExecutionSystemPrompt(state) {
+  if (legacySystemPromptsDisabled) return "";
+  return buildExecutionModeContext(state, state?.executionTools ?? state?.baseline?.tools ?? []);
+}
+
+export function buildPlanningModeContext(
+  state,
+  allowedToolsOrHasQuestionTool,
+  maybeHasQuestionTool,
+) {
+  if (!state.plan) return "";
+  const { allowedTools, hasQuestionTool } = planningInputs(
+    state,
+    allowedToolsOrHasQuestionTool,
+    maybeHasQuestionTool,
+  );
   const questionInstruction = hasQuestionTool
     ? `Use ${ASK_USER_QUESTION_TOOL} only when the user's decision materially changes the implementation.`
     : "Ask a concise clarification question in normal text only when the user's decision materially changes the implementation.";
 
-  return `[PLAN MODE ACTIVE]
+  return `[PI ONLY TOOLS MODE CONTEXT]
+mode=plan
+stage=planning
+allowed_tools=${JSON.stringify(allowedTools)}
+plan_path=${JSON.stringify(state.plan.path)}
+plan_revision=${state.plan.revision}
+plan_sha256=${state.plan.hash}
+
+[PLAN MODE ACTIVE]
 
 You are investigating and designing an implementation plan. You are not implementing it.
 
@@ -39,6 +79,7 @@ Hard constraints:
 - Do not modify project files, configuration, dependencies, Git state, external systems, or running services.
 - The only writable artifact is the canonical plan document below, and it may only be replaced with ${PLAN_WRITE_TOOL}.
 - The configured Plan tool allowlist is: ${formatToolNames(allowedTools)}.
+- A tool outside that allowlist may remain visible only because the provider catalogue is kept stable for prompt caching; do not call it.
 - Use allowed tools only for repository investigation, clarification, and planning. An allowed tool does not grant permission to perform side effects.
 - Do not claim that code was changed or tests were run.
 - Do not attempt to bypass blocked or unavailable tools.
@@ -99,9 +140,17 @@ Final-plan quality rules:
 - Do not begin implementation until the user explicitly chooses to execute the reviewed plan.`;
 }
 
-export function buildReadySystemPrompt(state) {
+export function buildReadyModeContext(state) {
   if (!state.plan) return "";
-  return `[PLAN READY FOR USER REVIEW]
+  return `[PI ONLY TOOLS MODE CONTEXT]
+mode=plan
+stage=ready
+allowed_tools=[]
+plan_path=${JSON.stringify(state.plan.path)}
+plan_revision=${state.plan.revision}
+plan_sha256=${state.plan.hash}
+
+[PLAN READY FOR USER REVIEW]
 
 The canonical plan at ${state.plan.path}, revision ${state.plan.revision}, is awaiting user review.
 Do not call tools and do not implement it.
@@ -109,10 +158,19 @@ The user may execute it through the review menu or /plan-approve, edit it, or pr
 If the user provides ordinary feedback, resume Plan Mode and publish a revised complete plan with ${PLAN_WRITE_TOOL}.`;
 }
 
-export function buildExecutionSystemPrompt(state) {
+export function buildExecutionModeContext(state, allowedTools = []) {
   if (!state.approved) return "";
-  return `[EXECUTING USER-APPROVED PLAN]
+  return `[PI ONLY TOOLS MODE CONTEXT]
+mode=normal
+stage=executing
+allowed_tools=${JSON.stringify(allowedTools)}
+approved_revision=${state.approved.revision}
+approved_sha256=${state.approved.hash}
+
+[EXECUTING USER-APPROVED PLAN]
 
 Implement the exact approved plan revision ${state.approved.revision} (${state.approved.hash}).
-Use the implementation tools available in this session. Keep scope stable, verify changes appropriately, and report blockers rather than silently changing the design.`;
+Use only the Normal profile tools allowed for this session: ${formatToolNames(allowedTools)}.
+A tool outside that allowlist may remain visible only because the provider catalogue is kept stable for prompt caching; do not call it.
+Keep scope stable, verify changes appropriately, and report blockers rather than silently changing the design.`;
 }
