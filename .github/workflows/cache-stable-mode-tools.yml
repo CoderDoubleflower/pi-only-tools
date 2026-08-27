@@ -22,3 +22,10 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-entry-source
+          path: test/test.mjs
+          if-no-files-found: error
+          retention-days: 1
