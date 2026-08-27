@@ -19,8 +19,8 @@ export class ToolProfileController {
   constructor(pi, options = {}) {
     this.pi = pi;
     this.mode = "normal";
-    // Extension action methods are unavailable while extensions are being loaded.
-    // The normal profile is initialized from runtime state during session_start instead.
+    // Runtime action methods are unavailable while extensions are loading. The
+    // catalogue is synchronized after session_start, once all tools exist.
     const initial = uniqueToolNames(options.initialTools ?? []);
     this.profiles = new Map([
       ["normal", initial],
@@ -37,17 +37,16 @@ export class ToolProfileController {
     this.assertProfile(profile);
     this.profiles.set(profile, uniqueToolNames(names));
     if (options.activate === true) this.mode = profile;
-    if (options.apply === false || (options.activate !== true && this.mode !== profile)) {
-      return this.getEffectiveTools(profile);
-    }
-    return this.apply();
+    if (options.apply !== false) this.syncCatalog();
+    return this.getEffectiveTools(profile);
   }
 
   activate(profile, names) {
     this.assertProfile(profile);
     if (names !== undefined) this.profiles.set(profile, uniqueToolNames(names));
     this.mode = profile;
-    return this.apply();
+    this.syncCatalog();
+    return this.getEffectiveTools(profile);
   }
 
   getRequestedTools(profile = this.mode) {
@@ -55,12 +54,16 @@ export class ToolProfileController {
     return [...(this.profiles.get(profile) ?? [])];
   }
 
-  getRegisteredToolNames() {
-    return new Set(
+  getRegisteredToolOrder() {
+    return uniqueToolNames(
       (this.pi.getAllTools?.() ?? [])
         .map((tool) => tool?.name)
         .filter((name) => typeof name === "string" && name.length > 0),
     );
+  }
+
+  getRegisteredToolNames() {
+    return new Set(this.getRegisteredToolOrder());
   }
 
   getUnavailableTools(names) {
@@ -75,14 +78,34 @@ export class ToolProfileController {
     return this.getRequestedTools(profile).filter((name) => !unavailable.has(name));
   }
 
-  apply() {
-    const effective = this.getEffectiveTools();
+  getAllowedTools(profile = this.mode) {
+    return this.getEffectiveTools(profile);
+  }
+
+  getCatalogTools() {
+    const requested = new Set();
+    for (const profile of this.profiles.keys()) {
+      for (const name of this.getEffectiveTools(profile)) requested.add(name);
+    }
+    return this.getRegisteredToolOrder().filter((name) => requested.has(name));
+  }
+
+  syncCatalog() {
+    const catalog = this.getCatalogTools();
     const current = uniqueToolNames(this.pi.getActiveTools?.() ?? []);
-    if (!equalToolLists(current, effective)) this.pi.setActiveTools(effective);
-    return effective;
+    if (!equalToolLists(current, catalog)) this.pi.setActiveTools?.(catalog);
+    return catalog;
+  }
+
+  // Backward-compatible name used by existing integration points. Applying a
+  // profile now synchronizes the stable union catalogue instead of swapping to
+  // the current profile's subset.
+  apply() {
+    return this.syncCatalog();
   }
 
   snapshot() {
+    const catalogTools = this.getCatalogTools();
     return {
       mode: this.mode,
       requested: {
@@ -95,7 +118,9 @@ export class ToolProfileController {
         ask: this.getEffectiveTools("ask"),
         plan: this.getEffectiveTools("plan"),
       },
-      activeTools: this.getEffectiveTools(),
+      allowedTools: this.getEffectiveTools(),
+      catalogTools,
+      activeTools: uniqueToolNames(this.pi.getActiveTools?.() ?? catalogTools),
     };
   }
 }

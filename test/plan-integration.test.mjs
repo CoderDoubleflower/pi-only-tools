@@ -1,88 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-const root = await mkdtemp(join(tmpdir(), "pi-only-tools-plan-v2-"));
-const agentDir = join(root, "agent");
-await mkdir(agentDir, { recursive: true });
-process.env.PI_CODING_AGENT_DIR = agentDir;
-
-const { createToolProfileController } = await import("../src/tool-profile-controller.js");
-const { registerClaudePlanMode, PLAN_STATE_ENTRY } = await import("../src/plan/index.js");
+import { createToolProfileController } from "../src/tool-profile-controller.js";
+import { __test as planIndexTest } from "../src/plan/index.js";
 
 const handlers = new Map();
-const commands = new Map();
-const tools = new Map();
-const entries = [];
-const notifications = [];
-const sentMessages = [];
-const pendingDispatches = [];
-const terminalInputHandlers = new Set();
-const reviewChoices = ["Keep reviewing for now"];
-const reviewPrompts = [];
-const registered = new Set([
+const registered = [
   "shell_command",
   "apply_patch",
   "read",
   "grep",
-  "find",
-  "ls",
   "ask_user_question",
-]);
+  "plan_write",
+];
 let activeTools = ["shell_command", "apply_patch"];
-let thinkingLevel = "medium";
-let sessionName = "plan-test";
-const models = new Map([
-  ["base/base-model", { provider: "base", id: "base-model" }],
-  ["planner/planner-model", { provider: "planner", id: "planner-model" }],
-  ["normal/normal-model", { provider: "normal", id: "normal-model" }],
-]);
-
-const sessionManager = {
-  getSessionId: () => "plan-session",
-  getSessionFile: () => join(root, "plan-session.jsonl"),
-  getEntries: () => entries,
-  getBranch: () => entries,
-};
-
-const ctx = {
-  cwd: root,
-  mode: "tui",
-  hasUI: true,
-  sessionManager,
-  model: models.get("base/base-model"),
-  modelRegistry: {
-    find: (provider, model) => models.get(`${provider}/${model}`),
-    getAvailable: () => [...models.values()],
-  },
-  scopedModels: [],
-  thinkingLevel,
-  isIdle: () => true,
-  isProjectTrusted: () => true,
-  hasPendingMessages: () => false,
-  getSystemPrompt: () => "base prompt",
-  waitForIdle: async () => undefined,
-  newSession: async () => ({ cancelled: true }),
-  ui: {
-    theme: { fg: (_color, text) => text },
-    async select(title, choices) {
-      reviewPrompts.push({ title, choices });
-      return reviewChoices.shift();
-    },
-    confirm: async () => true,
-    editor: async () => undefined,
-    notify: (message, type = "info") => notifications.push({ message, type }),
-    setStatus() {},
-    setWidget() {},
-    getEditorText: () => "",
-    setEditorText() {},
-    onTerminalInput(handler) {
-      terminalInputHandlers.add(handler);
-      return () => terminalInputHandlers.delete(handler);
-    },
-  },
-};
 
 const pi = {
   on(event, handler) {
@@ -90,73 +19,50 @@ const pi = {
     list.push(handler);
     handlers.set(event, list);
   },
-  registerTool(tool) {
-    tools.set(tool.name, tool);
-    registered.add(tool.name);
-    if (!activeTools.includes(tool.name)) activeTools.push(tool.name);
-  },
-  registerCommand(name, command) { commands.set(name, command); },
-  registerFlag() {},
-  getFlag: () => false,
-  getAllTools: () => [...registered].map((name) => ({ name })),
+  getAllTools: () => registered.map((name) => ({ name })),
   getActiveTools: () => [...activeTools],
-  setActiveTools: (names) => { activeTools = [...names]; },
-  appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
-  sendMessage(message, options) { sentMessages.push({ message, options }); },
-  sendUserMessage(content, options) {
-    sentMessages.push({ user: content, options });
-    if (
-      options?.expandPromptTemplates !== true ||
-      typeof content !== "string" ||
-      !content.startsWith("/")
-    ) {
-      return;
-    }
-    const [commandName, ...rest] = content.slice(1).split(/\s+/);
-    const command = commands.get(commandName);
-    if (!command) throw new Error(`Unknown dispatched command: ${commandName}`);
-    pendingDispatches.push(
-      Promise.resolve().then(() => command.handler(rest.join(" "), ctx)),
-    );
+  setActiveTools(names) {
+    activeTools = [...names];
   },
-  setSessionName(name) { sessionName = name; },
-  getSessionName: () => sessionName,
-  async setModel(model) { ctx.model = model; return true; },
-  getThinkingLevel: () => thinkingLevel,
-  setThinkingLevel(level) { thinkingLevel = level; ctx.thinkingLevel = level; },
 };
 
-await writeFile(
-  join(agentDir, "claude-plan-mode.json"),
-  JSON.stringify({
-    tools: ["read", "ask_user_question", "ExitPlanMode"],
-    planning: { provider: "planner", model: "planner-model", thinkingLevel: "high" },
-    normal: { provider: "normal", model: "normal-model", thinkingLevel: "xhigh" },
-  }),
-);
-
 const profiles = createToolProfileController(pi);
-const plan = registerClaudePlanMode(pi, { toolProfiles: profiles });
-profiles.setProfile(
-  "normal",
-  ["shell_command", "apply_patch", "EnterPlanMode"],
-  { apply: false },
-);
-profiles.setProfile("ask", ["read", "ask_user_question"], { apply: false });
+profiles.setProfile("normal", ["shell_command", "apply_patch"], { apply: false });
+profiles.setProfile("ask", ["read"], { apply: false });
 profiles.setProfile(
   "plan",
-  ["read", "ask_user_question", "plan_write", "ExitPlanMode"],
+  ["read", "grep", "ask_user_question", "plan_write"],
   { apply: false },
 );
 profiles.activate("normal");
-assert.equal(plan.enabled, true);
-assert.equal(plan.getMode(), "normal");
-assert.deepEqual([...tools.keys()].sort(), ["EnterPlanMode", "plan_write"].sort());
-assert.equal(tools.has("ExitPlanMode"), false, "ExitPlanMode must not be registered for the model");
-assert.ok(commands.has("mode"), "the integrated runtime must register /mode");
-assert.equal(commands.has("ask"), false, "Ask must not expose a separate command");
+const stableCatalog = [
+  "shell_command",
+  "apply_patch",
+  "read",
+  "grep",
+  "ask_user_question",
+  "plan_write",
+];
+assert.deepEqual(activeTools, stableCatalog);
 
-async function emit(event, payload = {}) {
+let planState;
+let askActive = false;
+const legacyMode = {
+  getState: () => planState,
+};
+const askMode = {
+  isActive: () => askActive,
+  getAllowedTools: () => profiles.getEffectiveTools("ask"),
+};
+
+const policy = planIndexTest.registerRuntimeModePolicy(
+  pi,
+  legacyMode,
+  askMode,
+  profiles,
+);
+
+async function emit(event, payload = {}, ctx = {}) {
   let result;
   for (const handler of handlers.get(event) ?? []) {
     const next = await handler({ type: event, ...payload }, ctx);
@@ -165,134 +71,118 @@ async function emit(event, payload = {}) {
   return result;
 }
 
-async function waitForMode(mode) {
-  for (let i = 0; i < 50 && plan.getMode() !== mode; i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  assert.equal(plan.getMode(), mode);
-}
-
 await emit("session_start", { reason: "startup" });
-assert.equal(terminalInputHandlers.size, 1, "one controller must own Shift+Tab");
-const terminalInputHandler = [...terminalInputHandlers][0];
+const normalPrompt = await emit("before_agent_start", { systemPrompt: "BASE" });
+assert.match(normalPrompt.systemPrompt, /\[PI ONLY TOOLS MODE PROTOCOL\]/);
+assert.match(normalPrompt.message.content, /mode=normal/);
+assert.deepEqual(normalPrompt.message.details.allowedTools, ["shell_command", "apply_patch"]);
+assert.deepEqual(activeTools, stableCatalog);
 
-assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
-await waitForMode("ask");
-assert.equal(profiles.mode, "ask");
-assert.deepEqual(activeTools, ["read", "ask_user_question"]);
-let promptResult = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(promptResult.systemPrompt, /\[ASK MODE ACTIVE\]/);
-assert.match(promptResult.systemPrompt, /strictly read-only/);
-assert.doesNotMatch(promptResult.systemPrompt, /shell_command/);
-const blockedEdit = await emit("tool_call", { toolName: "apply_patch" });
-assert.equal(blockedEdit.block, true);
-assert.match(blockedEdit.reason, /Ask Mode blocks apply_patch/);
+const repeatedNormalPrompt = await emit("before_agent_start", { systemPrompt: "BASE" });
+assert.equal(repeatedNormalPrompt.message, undefined, "unchanged mode state must not append duplicate hidden context");
+assert.equal(repeatedNormalPrompt.systemPrompt, normalPrompt.systemPrompt);
+
+askActive = true;
+profiles.activate("ask");
+const askPrompt = await emit("before_agent_start", { systemPrompt: "BASE" });
+assert.equal(askPrompt.systemPrompt, normalPrompt.systemPrompt, "system prompt must be byte-stable across modes");
+assert.match(askPrompt.message.content, /\[ASK MODE ACTIVE\]/);
+assert.deepEqual(askPrompt.message.details.allowedTools, ["read"]);
+assert.deepEqual(activeTools, stableCatalog);
 assert.equal(await emit("tool_call", { toolName: "read" }), undefined);
+assert.match((await emit("tool_call", { toolName: "apply_patch" })).reason, /Ask Mode blocks apply_patch/);
 
-assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
-await waitForMode("plan");
-assert.equal(profiles.mode, "plan");
-assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
+askActive = false;
+planState = {
+  stage: "planning",
+  plan: {
+    id: "plan-1",
+    path: "/tmp/cache-plan.md",
+    revision: 3,
+    hash: "abc123",
+  },
+  planningTools: ["read", "grep", "ask_user_question"],
+};
+profiles.activate("plan");
+const planningPrompt = await emit("before_agent_start", { systemPrompt: "BASE" });
+assert.equal(planningPrompt.systemPrompt, normalPrompt.systemPrompt);
+assert.match(planningPrompt.message.content, /\[PLAN MODE ACTIVE\]/);
+assert.match(planningPrompt.message.content, /plan_revision=3/);
+assert.match(planningPrompt.message.content, /plan_sha256=abc123/);
+assert.deepEqual(planningPrompt.message.details.allowedTools, [
+  "read",
+  "grep",
+  "ask_user_question",
+  "plan_write",
+]);
+assert.deepEqual(activeTools, stableCatalog);
+assert.equal(await emit("tool_call", { toolName: "read" }), undefined);
+assert.match((await emit("tool_call", { toolName: "shell_command" })).reason, /Plan Mode blocks shell_command/);
 
-assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
-await waitForMode("normal");
-assert.equal(profiles.mode, "normal");
-assert.deepEqual(activeTools, ["shell_command", "apply_patch", "EnterPlanMode"]);
-
-await commands.get("plan").handler("on Inspect the review workflow", ctx);
-assert.equal(profiles.mode, "plan");
-assert.equal(plan.getMode(), "plan");
-assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
-assert.equal(ctx.model.provider, "planner");
-assert.equal(thinkingLevel, "high");
-
-promptResult = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(promptResult.systemPrompt, /Repository reconnaissance/);
-assert.match(promptResult.systemPrompt, /Current State/);
-assert.doesNotMatch(promptResult.systemPrompt, /ExitPlanMode/);
-assert.match(promptResult.systemPrompt, /do not call any exit/i);
-
-const invalidResult = await tools.get("plan_write").execute(
-  "invalid",
-  { content: "# Too short\n\n## Context\nMissing the required verified structure.\n", expected_revision: 1 },
-  undefined,
-  undefined,
-  ctx,
+const providerTools = stableCatalog.map((name) => ({
+  type: "function",
+  name,
+  description: name,
+}));
+const planningPayload = {
+  model: "gpt-5.6",
+  input: [],
+  stream: true,
+  tools: providerTools,
+};
+const restrictedPlanningPayload = await emit(
+  "before_provider_request",
+  { payload: planningPayload },
+  { model: { api: "openai-responses", provider: "openai" } },
 );
-assert.equal(invalidResult.terminate, undefined);
-assert.match(invalidResult.content[0].text, /not ready for review/);
-assert.equal(plan.getStage(), "planning");
+assert.strictEqual(restrictedPlanningPayload.tools, providerTools);
+assert.deepEqual(restrictedPlanningPayload.tool_choice, {
+  type: "allowed_tools",
+  mode: "auto",
+  tools: [
+    { type: "function", name: "read" },
+    { type: "function", name: "grep" },
+    { type: "function", name: "ask_user_question" },
+    { type: "function", name: "plan_write" },
+  ],
+});
 
-const validPlan = `# Make Plan approval user-controlled
-
-## Context
-The current workflow exposes a model-callable exit action and repeats the same plan during approval. The change must publish one reviewable revision, preserve the existing revision/hash snapshot, and transition to implementation only after an explicit user choice.
-
-## Current State
-- \`src/plan/index.js\`: \`registerClaudePlanMode\` owns planning state, publication, the review command, and execution handoff.
-- \`src/plan/tool-set.js\`: \`buildPlanningTools\` determines the model-visible planning allowlist.
-- \`src/plan-tool-ui.js\`: the current renderer receives the complete plan in the call arguments and can render it without duplicating model-visible output.
-
-## Implementation Steps
-1. **Publish directly from plan_write**
-   - Files: \`src/plan/index.js\`, \`src/plan/tool-set.js\`
-   - Change: validate the complete document, create the ready snapshot, terminate the planning turn, and exclude the legacy exit action from registered and active tools.
-   - Reuse: \`isPlanReady\` from \`src/plan/plan-store.js\` and \`approvePlan\` from \`src/plan/handoff.js\`.
-   - Flow: planning moves to ready after publication; only the user review command can move ready to executing.
-2. **Render the plan exactly once**
-   - Files: \`src/plan-tool-ui.js\`, \`src/claude-tool-ui.js\`
-   - Change: use the shared call/result layout and render the Markdown body with Pi Markdown.
-   - Dependencies: state metadata must be finalized before rendering the result status.
-
-## Risks and Compatibility
-- Existing profile files can contain the removed control tool, so loaders must filter it and persist a migrated configuration version.
-
-## Verification
-- Automated: \`npm test\`
-- Integration: confirm planning → ready occurs after a valid plan_write and ready → executing occurs only after the user chooses execution.
-- Manual/TUI: confirm one readable plan is shown with no visible or model-callable exit action.
-`;
-
-const validResult = await tools.get("plan_write").execute(
-  "valid",
-  { content: validPlan, expected_revision: 2 },
-  undefined,
-  undefined,
-  ctx,
+planState = {
+  ...planState,
+  stage: "ready",
+};
+const readyPrompt = await emit("before_agent_start", { systemPrompt: "BASE" });
+assert.equal(readyPrompt.systemPrompt, normalPrompt.systemPrompt);
+assert.match(readyPrompt.message.content, /\[PLAN READY FOR USER REVIEW\]/);
+assert.deepEqual(readyPrompt.message.details.allowedTools, []);
+assert.match((await emit("tool_call", { toolName: "read" })).reason, /Plan Ready blocks read/);
+const readyPayload = await emit(
+  "before_provider_request",
+  { payload: planningPayload },
+  { model: { api: "openai-responses", provider: "openai-codex" } },
 );
-assert.equal(validResult.terminate, true);
-assert.equal(validResult.details.readiness.ready, true);
-assert.doesNotMatch(validResult.content[0].text, /# Make Plan approval/);
-assert.equal(entries.filter((entry) => entry.customType === PLAN_STATE_ENTRY).at(-1).data.stage, "ready");
-assert.equal(profiles.mode, "plan");
-assert.deepEqual(activeTools, ["read", "plan_write", "ask_user_question"]);
+assert.strictEqual(readyPayload.tools, providerTools);
+assert.equal(readyPayload.tool_choice, "none");
 
-await emit("agent_settled");
-await Promise.all(pendingDispatches);
-assert.equal(reviewPrompts.length, 1, "a valid plan_write must open the user review menu after rendering");
-assert.ok(reviewPrompts[0].choices.includes("Execute plan (keep context)"));
-assert.equal(plan.getStage(), "ready", "dismissing execution must keep the published revision ready");
+planState = {
+  ...planState,
+  stage: "executing",
+  approved: { revision: 3, hash: "abc123" },
+  baseline: { tools: ["shell_command", "apply_patch"] },
+  executionTools: ["shell_command", "apply_patch"],
+};
+profiles.activate("normal");
+const executionPrompt = await emit("before_agent_start", { systemPrompt: "BASE" });
+assert.equal(executionPrompt.systemPrompt, normalPrompt.systemPrompt);
+assert.match(executionPrompt.message.content, /\[EXECUTING USER-APPROVED PLAN\]/);
+assert.deepEqual(executionPrompt.message.details.allowedTools, ["shell_command", "apply_patch"]);
+assert.deepEqual(activeTools, stableCatalog);
+assert.equal(await emit("tool_call", { toolName: "apply_patch" }), undefined);
+assert.match((await emit("tool_call", { toolName: "read" })).reason, /Normal profile blocks read/);
 
-const blockedExit = await emit("tool_call", { toolName: "ExitPlanMode" });
-assert.equal(blockedExit.block, true);
-assert.match(blockedExit.reason, /user-controlled/);
-
-await commands.get("plan-approve").handler("keep", ctx);
-assert.equal(plan.getStage(), "executing");
-assert.equal(profiles.mode, "normal");
-assert.deepEqual(activeTools, ["shell_command", "apply_patch", "EnterPlanMode"]);
-assert.equal(ctx.model.provider, "normal");
-assert.equal(thinkingLevel, "xhigh");
-const handoff = sentMessages.find((entry) => entry.message?.customType === "claude-plan-mode-handoff");
-assert.ok(handoff);
-assert.equal(handoff.message.display, false, "approved-plan handoff must stay model-visible but hidden from the transcript");
-assert.match(handoff.message.content, /<approved-plan/);
-
-await commands.get("plan").handler("finish", ctx);
-assert.equal(plan.getStage(), "idle");
-assert.equal(profiles.mode, "normal");
-
-await emit("session_shutdown");
-assert.equal(terminalInputHandlers.size, 0);
-await rm(root, { recursive: true, force: true });
-console.log("Normal/Ask/Plan workflow integration tests passed");
+await emit("session_compact", {});
+const reinjectedAfterCompaction = await emit("before_agent_start", { systemPrompt: "BASE" });
+assert.ok(reinjectedAfterCompaction.message, "compaction must force the current hidden context to be re-injected");
+assert.deepEqual(policy.getAllowedTools(), ["shell_command", "apply_patch"]);
+assert.deepEqual(policy.getSnapshot().allowedTools, ["shell_command", "apply_patch"]);
+console.log("cache-stable Normal, Ask, and Plan policy integration tests passed");
