@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   MODE_STATE_CUSTOM_TYPE,
-  MODE_SYSTEM_PROMPT_MARKER,
+  STABLE_MODE_SYSTEM_PROMPT,
   appendRuntimeStateMessage,
   appendStableModeSystemPrompt,
   buildRuntimeStateMessage,
@@ -86,7 +86,8 @@ assert.deepEqual(executing.approvedPlan, { revision: 3, hash: "abc" });
 
 const basePrompt = "base";
 const stablePrompt = appendStableModeSystemPrompt(basePrompt);
-assert.match(stablePrompt, new RegExp(MODE_SYSTEM_PROMPT_MARKER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+assert.equal(stablePrompt.endsWith(STABLE_MODE_SYSTEM_PROMPT), true);
+assert.doesNotMatch(stablePrompt, /\[PI-ONLY-TOOLS MODE PROTOCOL v1\]/);
 assert.equal(appendStableModeSystemPrompt(stablePrompt), stablePrompt);
 assert.doesNotMatch(stablePrompt, /\/tmp\/plan\.md/);
 assert.doesNotMatch(stablePrompt, /revision: 3/);
@@ -187,7 +188,8 @@ async function emit(event, payload = {}) {
   return result;
 }
 const before = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(before.systemPrompt, /PI-ONLY-TOOLS MODE PROTOCOL/);
+assert.match(before.systemPrompt, /Pi exposes one stable tool catalog for the whole session\./);
+assert.doesNotMatch(before.systemPrompt, /PI-ONLY-TOOLS MODE PROTOCOL/);
 assert.equal(Object.hasOwn(before, "message"), false);
 const originalMessages = [
   { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
