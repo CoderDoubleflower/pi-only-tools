@@ -155,7 +155,7 @@ Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后
 - `ask`：严格只读问答模式，使用 Ask 列的持久工具 allowlist，并继承 Normal 的模型和 effort。
 - `plan`：Plan Mode 的持久调查工具 allowlist、模型和 effort；`plan_write` 锁定为必选。
 
-插件只注入一个固定的 `[PI-ONLY-TOOLS MODE PROTOCOL v1]` system suffix，Ask 的只读约束和 Plan 的流程约束都位于这个稳定前缀中。当前 `mode`、`workflowStage`、`allowedTools` 以及计划 revision/hash 通过 `context` hook 作为末尾隐藏 custom message 在每次 provider call 前临时加入；它不会写入 session history，也不会改写 system prompt。工具被选入 allowlist 只代表当前可调用，任何越权调用仍会被运行时阻止。
+插件只注入一段固定、无品牌标记的自然语言 system suffix，Ask 的只读约束和 Plan 的流程约束都位于这个稳定前缀中。当前 `mode`、`workflowStage`、`allowedTools` 以及计划 revision/hash 通过 `context` hook 作为末尾隐藏 custom message 在每次 provider call 前临时加入；它不会写入 session history，也不会改写 system prompt。工具被选入 allowlist 只代表当前可调用，任何越权调用仍会被运行时阻止。
 
 `EnterPlanMode` 只允许出现在 Normal；`plan_write` 只允许出现在 Plan。`ExitPlanMode` 不再注册或暴露给模型，旧配置中的同名项会在加载和迁移时清理。
 
