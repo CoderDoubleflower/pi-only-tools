@@ -3,6 +3,7 @@ import {
   __test as codexShellTest,
   createCodexShellExtensionApi,
 } from "./codex-shell-command.js";
+import { createClaudeToolRenderExtensionApi } from "./pi-open-tool-renderer.js";
 import { createPlanToolUiExtensionApi } from "./plan-tool-ui.js";
 
 function createProfileCommandDescriptionApi(pi) {
@@ -30,7 +31,8 @@ function createProfileCommandDescriptionApi(pi) {
 
 export default function piOnlyTools(pi) {
   const codexShellApi = createCodexShellExtensionApi(pi);
-  const profileCommandApi = createProfileCommandDescriptionApi(codexShellApi);
+  const claudeToolRenderApi = createClaudeToolRenderExtensionApi(codexShellApi);
+  const profileCommandApi = createProfileCommandDescriptionApi(claudeToolRenderApi);
   return basePlugin(createPlanToolUiExtensionApi(profileCommandApi));
 }
 
