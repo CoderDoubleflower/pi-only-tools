@@ -1,0 +1,164 @@
+name: Natural mode prompt
+
+on:
+  push:
+    branches:
+      - fix/natural-mode-prompt
+
+permissions:
+  contents: write
+
+jobs:
+  update-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Remove the branded protocol header
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{path}: expected one replacement target, found {count}")
+              file.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "src/cache-stable-mode.js",
+              '''export const MODE_STATE_CUSTOM_TYPE = "pi-only-tools-runtime-state";
+          export const MODE_STATE_SCHEMA_VERSION = 1;
+          export const MODE_SYSTEM_PROMPT_MARKER = "[PI-ONLY-TOOLS MODE PROTOCOL v1]";
+
+          const PROFILE_NAMES = new Set(["normal", "ask", "plan"]);
+
+          export const STABLE_MODE_SYSTEM_PROMPT = `${MODE_SYSTEM_PROMPT_MARKER}
+
+          Pi exposes one stable tool catalog for the whole session so provider prompt caches can reuse the tools and system-prefix definitions. The catalog is a superset, not a permission grant.
+          ''',
+              '''export const MODE_STATE_CUSTOM_TYPE = "pi-only-tools-runtime-state";
+          export const MODE_STATE_SCHEMA_VERSION = 1;
+
+          const PROFILE_NAMES = new Set(["normal", "ask", "plan"]);
+          const STABLE_MODE_SYSTEM_PROMPT_SENTINEL =
+            "Pi exposes one stable tool catalog for the whole session.";
+
+          export const STABLE_MODE_SYSTEM_PROMPT = `${STABLE_MODE_SYSTEM_PROMPT_SENTINEL}
+
+          The catalog is a superset, not a permission grant.
+          ''',
+          )
+          replace_once(
+              "src/cache-stable-mode.js",
+              "  if (base.includes(MODE_SYSTEM_PROMPT_MARKER)) return base;",
+              "  if (base.includes(STABLE_MODE_SYSTEM_PROMPT_SENTINEL)) return base;",
+          )
+
+          test_path = Path("test/cache-stable-mode.test.mjs")
+          test_text = test_path.read_text(encoding="utf-8")
+          test_text = test_text.replace(
+              "  MODE_SYSTEM_PROMPT_MARKER,\n",
+              "  STABLE_MODE_SYSTEM_PROMPT,\n",
+              1,
+          )
+          test_lines = test_text.splitlines()
+          replaced_stable = False
+          replaced_before = False
+          output = []
+          for line in test_lines:
+              if "assert.match(stablePrompt, new RegExp(MODE_SYSTEM_PROMPT_MARKER" in line:
+                  output.extend([
+                      "assert.equal(stablePrompt.endsWith(STABLE_MODE_SYSTEM_PROMPT), true);",
+                      "assert.doesNotMatch(stablePrompt, /\\[PI-ONLY-TOOLS MODE PROTOCOL v1\\]/);",
+                  ])
+                  replaced_stable = True
+              elif line == "assert.match(before.systemPrompt, /PI-ONLY-TOOLS MODE PROTOCOL/);":
+                  output.extend([
+                      "assert.match(before.systemPrompt, /Pi exposes one stable tool catalog for the whole session\\./);",
+                      "assert.doesNotMatch(before.systemPrompt, /PI-ONLY-TOOLS MODE PROTOCOL/);",
+                  ])
+                  replaced_before = True
+              else:
+                  output.append(line)
+          if not replaced_stable or not replaced_before:
+              raise RuntimeError("test/cache-stable-mode.test.mjs: expected assertions were not found")
+          test_path.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+          integration_path = Path("test/plan-integration.test.mjs")
+          integration = integration_path.read_text(encoding="utf-8")
+          old_assertion = "assert.match(promptResult.systemPrompt, /PI-ONLY-TOOLS MODE PROTOCOL/);"
+          new_assertions = (
+              "assert.match(promptResult.systemPrompt, /Pi exposes one stable tool catalog for the whole session\\./);\n"
+              "assert.doesNotMatch(promptResult.systemPrompt, /PI-ONLY-TOOLS MODE PROTOCOL/);"
+          )
+          if integration.count(old_assertion) != 1:
+              raise RuntimeError("test/plan-integration.test.mjs: expected assertion was not found exactly once")
+          integration_path.write_text(
+              integration.replace(old_assertion, new_assertions, 1),
+              encoding="utf-8",
+          )
+
+          replace_once(
+              "README.md",
+              "插件只注入一个固定的 `[PI-ONLY-TOOLS MODE PROTOCOL v1]` system suffix，Ask 的只读约束和 Plan 的流程约束都位于这个稳定前缀中。",
+              "插件只注入一段固定、无品牌标记的自然语言 system suffix，Ask 的只读约束和 Plan 的流程约束都位于这个稳定前缀中。",
+          )
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          changelog = changelog.replace(
+              "- Replace mode-specific dynamic system-prompt rewrites with one fixed mode protocol plus an ephemeral `context` runtime-state message that is not persisted to the session tree.",
+              "- Replace mode-specific dynamic system-prompt rewrites with one fixed natural-language mode policy plus an ephemeral `context` runtime-state message that is not persisted to the session tree.\n- Remove the model-visible `[PI-ONLY-TOOLS MODE PROTOCOL v1]` heading and keep idempotent injection through a natural opening sentence.",
+              1,
+          )
+          changelog = changelog.replace(
+              "- Move Ask read-only behavior into the fixed mode protocol; the ephemeral runtime-state message carries the active mode and allowed tool names.",
+              "- Move Ask read-only behavior into the fixed natural-language mode policy; the ephemeral runtime-state message carries the active mode and allowed tool names.",
+              1,
+          )
+          changelog_path.write_text(changelog, encoding="utf-8")
+          PY
+
+          if grep -F '[PI-ONLY-TOOLS MODE PROTOCOL v1]' src/cache-stable-mode.js; then
+            echo 'The branded header is still present in the model-visible prompt.' >&2
+            exit 1
+          fi
+
+      - name: Test and validate
+        shell: bash
+        run: |
+          npm test
+          npm run build
+          npm run check
+          git diff --check
+
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/cache-stable-mode.js test/cache-stable-mode.test.mjs test/plan-integration.test.mjs README.md CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No prompt changes were produced." >&2
+            exit 1
+          fi
+          git commit -m "fix: remove branded mode prompt header"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
