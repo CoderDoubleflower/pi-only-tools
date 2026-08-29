@@ -74,8 +74,14 @@ plugin({
 
 assert.deepEqual([...tools.keys()], ["shell_command", "apply_patch"]);
 const shell = tools.get("shell_command");
+const patch = tools.get("apply_patch");
 assert.match(shell.description, /1 MiB/);
 assert.match(shell.description, /10,000 tokens/);
+for (const [name, tool] of [["shell_command", shell], ["apply_patch", patch]]) {
+  assert.equal(Object.hasOwn(tool, "renderCall"), false, `${name} must delegate call rendering`);
+  assert.equal(Object.hasOwn(tool, "renderResult"), false, `${name} must delegate result rendering`);
+  assert.equal(Object.hasOwn(tool, "renderShell"), false, `${name} must use the active TUI tool shell`);
+}
 
 const temp = await mkdtemp(path.join(os.tmpdir(), "pi-only-tools-entry-"));
 try {
@@ -124,6 +130,12 @@ for (const name of loadingActions) {
   };
 }
 assert.doesNotThrow(() => plugin(loadOnlyApi));
+for (const toolName of ["shell_command", "apply_patch"]) {
+  const tool = loadOnlyTools.get(toolName);
+  assert.equal(Object.hasOwn(tool, "renderCall"), false);
+  assert.equal(Object.hasOwn(tool, "renderResult"), false);
+  assert.equal(Object.hasOwn(tool, "renderShell"), false);
+}
 for (const toolName of ["EnterPlanMode", "plan_write"]) {
   assert.equal(
     loadOnlyTools.get(toolName).renderShell,
