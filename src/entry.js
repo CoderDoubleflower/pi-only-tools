@@ -4,6 +4,7 @@ import {
   createCodexShellExtensionApi,
 } from "./codex-shell-command.js";
 import { createPlanToolUiExtensionApi } from "./plan-tool-ui.js";
+import { createToolRendererDelegationApi } from "./tool-renderer-delegation.js";
 
 function createProfileCommandDescriptionApi(pi) {
   if (typeof pi.registerCommand !== "function") return pi;
@@ -31,7 +32,9 @@ function createProfileCommandDescriptionApi(pi) {
 export default function piOnlyTools(pi) {
   const codexShellApi = createCodexShellExtensionApi(pi);
   const profileCommandApi = createProfileCommandDescriptionApi(codexShellApi);
-  return basePlugin(createPlanToolUiExtensionApi(profileCommandApi));
+  const planToolUiApi = createPlanToolUiExtensionApi(profileCommandApi);
+  const delegatedToolUiApi = createToolRendererDelegationApi(planToolUiApi);
+  return basePlugin(delegatedToolUiApi);
 }
 
 export const __test = baseTest;

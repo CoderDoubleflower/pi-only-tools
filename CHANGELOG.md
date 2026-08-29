@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Remove `renderCall`, `renderResult`, and `renderShell: "self"` from the production `shell_command` and `apply_patch` definitions so the active TUI owns their presentation; `pi-open-tui` can now apply its shared OpenAI-style renderer without competing tool-local framing.
+- Keep the specialized `EnterPlanMode` and `plan_write` renderers unchanged because they own Plan-specific streaming and Markdown presentation rather than generic shell/patch chrome.
 - Keep one provider-visible tool catalog for the extension/session lifetime; Normal, Ask, and Plan now change runtime allowlists instead of replacing the `tools` array.
 - Preserve catalog prefix order across mode switches and permission removals; newly enabled registered tools append in Pi registry order and the catalog is rebuilt only after reload/session replacement.
 - Replace mode-specific dynamic system-prompt rewrites with one fixed natural-language mode policy plus an ephemeral `context` runtime-state message that is not persisted to the session tree.

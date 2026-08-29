@@ -5,7 +5,7 @@
 - `shell_command`
 - `apply_patch`
 
-两个工具使用紧凑的终端渲染：调用行显示为 `Bash(...)` / `Update(...)`，结果使用 `⎿` 前缀，长输出默认折叠，文件修改显示增删行统计和带行号的 diff。
+这两个基础工具只负责参数协议、执行、流式更新和有界结果，不再注册自己的 `renderCall`、`renderResult` 或 `renderShell: "self"`。工具如何显示由当前 TUI 统一决定：安装 `pi-open-tui` 时会按工具名使用其共享 OpenAI/Claude 风格 renderer；未安装时则回退到 Pi 的标准工具外框。Plan 工具仍保留专用渲染，因为 `plan_write` 需要流式展示并用 Pi Markdown 呈现完整计划。
 
 Normal、Ask、Plan 三个工具 Profile 都在 `/only-tools` 的同一张矩阵中持久配置。Ask 使用独立工具 allowlist，但模型与 effort 继承 Normal；Plan 继续使用独立模型、effort 和调查工具 allowlist。
 
@@ -275,8 +275,8 @@ normal
 - Unix 默认通过 `$SHELL -lc` 执行；没有 `$SHELL` 时使用 `/bin/bash`。
 - Windows 使用 `cmd.exe /d /s /c`。
 - 支持流式输出、超时和 AbortSignal 中断。
-- stdout、stderr 分开渲染；stderr 和非零退出状态使用错误色。
-- 默认每个输出区块展示 3 行；只多 1 行时直接展示第 4 行，否则显示 `… +N lines (ctrl+o to expand)`。
+- 流式更新与最终 `details` 保留有界 stdout/stderr 预览和状态数据，供当前 TUI 或其他扩展使用。
+- 本插件不再决定调用行、结果前缀、颜色、折叠行数或展开布局。
 
 ### 与 Codex 对齐的输出限制
 
@@ -322,49 +322,32 @@ export PI_ONLY_TOOLS_SHELL=/bin/zsh
 *** Move to:
 ```
 
-执行前后，插件会读取涉及的文本文件并计算真实差异，因此 UI 中的 `Added N lines, removed N lines` 不是只依赖 patch 文本估算。单文件超过 2 MiB、二进制文件或过大的 diff 会回退到简化统计。
+执行前后，插件仍会读取涉及的文本文件并计算真实差异，将 `additions`、`removals`、hunk 和文件信息保存在 `details.patchSummary`，供诊断或 renderer 消费。单文件超过 2 MiB、二进制文件或过大的 diff 会回退到简化统计；`pi-only-tools` 自身不再把这些数据渲染成固定终端样式。
 
-## 工具渲染
+## 渲染职责
 
-命令：
-
-```text
-Bash(git status --short)
-  ⎿  M src/index.ts
-     ?? test/new.test.ts
-```
-
-文件修改：
+生产入口会在注册 `shell_command` 和 `apply_patch` 前移除：
 
 ```text
-Update(src/index.ts)
-  ⎿  Added 1 line, removed 1 line
-       10 -const enabled = false;
-       10 +const enabled = true;
+renderCall
+renderResult
+renderShell: "self"
 ```
 
-计划：
+因此不会再出现 `pi-only-tools` 与另一个 TUI 扩展同时抢占同一工具展示的情况：
+
+- 安装 `pi-open-tui` 时，它会根据 `shell_command` / `apply_patch` 工具名使用统一的 OpenAI 风格标题、状态、分组、输出策略和 rich diff。
+- 不安装 `pi-open-tui` 时，Pi 使用自己的标准工具外框和工具定义中的普通 label。
+- 其他 TUI 扩展也可以接管这两个工具，而不需要绕过 `pi-only-tools` 的私有 renderer。
+
+以下 Plan 工具仍保留专用渲染：
 
 ```text
-Write Plan(User-controlled Plan review)
-  ⎿  Plan r3 saved · 4 steps · awaiting your review
-
-     # User-controlled Plan review
-     ...
+EnterPlanMode
+plan_write
 ```
 
-计划正文由 Pi Markdown 渲染，不会把整个文档套成灰色 `toolOutput`；标题、列表、行内代码和代码块使用对应的语义样式。
-
-折叠输出：
-
-```text
-  ⎿  first line
-     second line
-     third line
-     … +12 lines (ctrl+o to expand)
-```
-
-Pi 的全局工具展开快捷键仍负责展开当前保留的 TUI 预览；超出 Codex 捕获与预览限制的内容不会写入 session。
+`plan_write` 的调用参数会流式显示，完成后使用 Pi Markdown 呈现计划正文；这属于 Plan workflow 本身，而不是通用 shell/patch 外观。
 
 ## 参数兼容
 
@@ -384,7 +367,7 @@ Pi 的全局工具展开快捷键仍负责展开当前保留的 TUI 预览；超
 升级后：
 
 1. Pi 按自己的 `defaultTools`、项目设置和 CLI 参数决定初始工具集。
-2. `shell_command` 与 `apply_patch` 按普通 extension tool 注册。
+2. `shell_command` 与 `apply_patch` 按普通 extension tool 注册，终端展示交给当前 TUI。
 3. 使用 `/only-tools` 统一管理 Normal / Ask / Plan 的持久工具矩阵。
 4. 使用 `/mode` 直接选择模式，或使用 `Shift+Tab` 循环 Normal → Ask → Plan → Normal。
 5. 需要恢复 0.1.0 的近似效果时，在 Normal 列中禁用不需要的内置工具；其他扩展工具仍按 Pi 的正常规则保留。
@@ -399,4 +382,4 @@ Pi 的全局工具展开快捷键仍负责展开当前保留的 TUI 预览；超
 - Ask Mode 会移除已知命令/编辑工具，并再次拦截 Ask allowlist 之外的 `tool_call`；第三方/MCP 工具的只读属性由用户在 `/only-tools` 中显式配置。
 - Ask Mode 不是操作系统沙箱，也不约束用户手动执行的命令。
 - 工具启用设置只改变模型可见的工具集，不构成操作系统安全边界。
-- 安装前应审查 `src/entry.js`、`src/codex-shell-command.js`、`src/index.js` 或 `dist/index.js`。
+- 安装前应审查 `src/entry.js`、`src/tool-renderer-delegation.js`、`src/codex-shell-command.js`、`src/index.js` 或 `dist/index.js`。
