@@ -4,8 +4,9 @@ import path from "node:path";
 import { DEFAULT_ASK_TOOLS, normalizeAskTools } from "./ask-mode-policy.js";
 import { LEGACY_EXIT_PLAN_MODE_TOOL } from "./plan/constants.js";
 
-export const PROFILE_CONFIG_VERSION = 4;
+export const PROFILE_CONFIG_VERSION = 5;
 export const PROFILE_NAMES = Object.freeze(["normal", "ask", "plan"]);
+const V5_INTEGRATED_TOOLS = Object.freeze(["web_search"]);
 
 export function normalizeToolNames(values) {
   const result = [];
@@ -87,6 +88,18 @@ function normalizeProfileObject(value, defaults, warnings, source) {
   return profiles;
 }
 
+function addV5IntegratedTools(profiles) {
+  let changed = false;
+  for (const profile of PROFILE_NAMES) {
+    for (const toolName of V5_INTEGRATED_TOOLS) {
+      if (profiles[profile].includes(toolName)) continue;
+      profiles[profile].push(toolName);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export async function loadProfileConfig(configPath, defaults = {}) {
   const warnings = [];
   try {
@@ -96,7 +109,7 @@ export async function loadProfileConfig(configPath, defaults = {}) {
     }
 
     if (
-      [2, 3, PROFILE_CONFIG_VERSION].includes(parsed.version) &&
+      [2, 3, 4, PROFILE_CONFIG_VERSION].includes(parsed.version) &&
       parsed.profiles &&
       typeof parsed.profiles === "object"
     ) {
@@ -125,6 +138,9 @@ export async function loadProfileConfig(configPath, defaults = {}) {
       const hadBlockedAskTools = askRaw.some(
         (name) => !normalizedProfiles.ask.includes(name),
       );
+      const addedIntegratedTools =
+        parsed.version < PROFILE_CONFIG_VERSION &&
+        addV5IntegratedTools(normalizedProfiles);
 
       if (hadExecutionProfile) {
         warnings.push(
@@ -134,6 +150,11 @@ export async function loadProfileConfig(configPath, defaults = {}) {
       if (!hadAskProfile) {
         warnings.push(
           `${configPath}: added the persistent Ask profile with safe read-only defaults.`,
+        );
+      }
+      if (addedIntegratedTools) {
+        warnings.push(
+          `${configPath}: added the integrated web_search tool to Normal, Ask, and Plan profiles.`,
         );
       }
       if (parsed.version !== PROFILE_CONFIG_VERSION) {
@@ -152,7 +173,8 @@ export async function loadProfileConfig(configPath, defaults = {}) {
           hadExecutionProfile ||
           !hadAskProfile ||
           hadLegacyExit ||
-          hadBlockedAskTools,
+          hadBlockedAskTools ||
+          addedIntegratedTools,
       };
     }
 
