@@ -20,7 +20,6 @@ export const DEFAULT_ASK_TOOLS = Object.freeze([
 export const ASK_MODE_FORBIDDEN_TOOLS = Object.freeze([
   "shell_command",
   "apply_patch",
-  "bash",
   "powershell",
   "edit",
   "write",
@@ -47,8 +46,9 @@ function uniqueToolNames(values) {
 /**
  * Ask is an explicit user-maintained allowlist. Pi does not expose a generic
  * read-only annotation for custom tools, so /only-tools is the source of truth
- * for third-party and MCP tools. Known command/edit/control tools stay locked
- * off even if they appear in an older configuration.
+ * for third-party and MCP tools. Known write/control tools stay locked off.
+ * Native `bash` is the deliberate exception needed by skills; its no-write
+ * contract is enforced as model policy rather than by the tool capability.
  */
 export function isAskToolConfigurable(value) {
   if (typeof value !== "string") return false;
@@ -93,14 +93,16 @@ You are answering the user's question in a strictly read-only investigation mode
 
 Hard constraints:
 - These Ask Mode constraints override any earlier planning, approved-plan, execution, or implementation instructions in the system prompt.
-- Do not create, modify, move, rename, or delete files.
+- Do not create, modify, move, rename, or delete files, including through bash, output redirection, tee, in-place flags, generated scripts, patch utilities, formatters, or code generators.
 - Do not change configuration, dependencies, Git state, external systems, running services, or user data.
-- Do not run shell commands, scripts, builds, tests, installers, or any other operation that may have side effects.
+- bash may be used only for commands required by an enabled skill or for read-only inspection such as listing, searching, reading, and reporting existing state.
+- Every bash command must be non-mutating. Do not install packages, write files, alter repositories, or run a command when its side effects are uncertain.
+- Do not use bash to bypass a blocked editing or write tool.
 - The Ask Profile configured in /only-tools is the explicit tool allowlist for this mode: ${formatToolNames(allowedTools)}.
 - Use an allowed tool only for reading, searching, listing, fetching, inspecting, or asking a material clarification question.
 - User configuration grants tool visibility, not permission to perform a write or side effect.
 - Do not attempt to bypass a blocked or unavailable tool.
-- Do not claim that code was changed, commands were run, or tests passed.
+- Report command observations accurately, but do not claim that files or state were changed.
 
 Answering process:
 - Inspect the minimum relevant sources needed for an accurate answer.
