@@ -5,7 +5,7 @@ import {
   __test,
 } from "../src/profile-matrix-ui.js";
 
-assert.equal(PROFILE_CONFIG_VERSION, 4);
+assert.equal(PROFILE_CONFIG_VERSION, 6);
 assert.deepEqual(PROFILE_NAMES, ["normal", "ask", "plan"]);
 
 assert.deepEqual(__test.lockedCell("plan", "plan_write"), {
@@ -23,6 +23,11 @@ assert.deepEqual(__test.lockedCell("ask", "shell_command"), {
   value: false,
   reason: "ask",
 });
+assert.deepEqual(__test.lockedCell("ask", "bash"), {
+  locked: false,
+  value: undefined,
+  reason: undefined,
+});
 assert.deepEqual(__test.lockedCell("ask", "web_fetch"), {
   locked: false,
   value: undefined,
@@ -35,13 +40,14 @@ assert.deepEqual(
 assert.deepEqual(
   runtimeToolsForProfile("ask", [
     "read",
+    "bash",
     "web_fetch",
     "mcp__github__get_file_contents",
     "shell_command",
     "apply_patch",
     "plan_write",
   ]),
-  ["read", "web_fetch", "mcp__github__get_file_contents"],
+  ["read", "bash", "web_fetch", "mcp__github__get_file_contents"],
 );
 assert.deepEqual(
   runtimeToolsForProfile("normal", [
@@ -65,7 +71,7 @@ const rows = __test.toolRows(
     ],
   },
   {
-    version: 4,
+    version: 6,
     profiles: {
       normal: ["read", "ExitPlanMode"],
       ask: ["web_fetch", "ExitPlanMode"],
@@ -105,7 +111,7 @@ const tools = [
   { name: "plan_write", registered: true, builtin: false },
 ];
 const config = {
-  version: 4,
+  version: 6,
   profiles: {
     normal: ["read", "shell_command"],
     ask: ["web_fetch"],
