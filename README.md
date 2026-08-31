@@ -80,6 +80,7 @@ pi update --extensions
 Model               provider/model      inherit Normal      provider/model
 Effort              high                inherit Normal      xhigh
 read                ●                   ●                   ●
+bash                ●                   ●                   ●
 shell_command       ●                   ◇                   ○
 web_fetch           ○                   ●                   ●
 plan_write          ◇                   ◇                   ◆
@@ -105,12 +106,11 @@ plan_write          ◇                   ◇                   ◆
 
 Ask 列就是 Ask Mode 的持久权限来源，不再从 Plan 列推导。用户可以在这里启用核心读取工具以及确认只读的第三方/MCP 工具。
 
-以下已知命令、编辑和工作流控制工具在 Ask 列中始终锁定关闭，即使旧配置包含它们也会在迁移时清理：
+以下已知编辑、替代命令执行和工作流控制工具在 Ask 列中始终锁定关闭，即使旧配置包含它们也会在迁移时清理：
 
 ```text
 shell_command
 apply_patch
-bash
 powershell
 edit
 write
@@ -119,7 +119,9 @@ plan_write
 ExitPlanMode
 ```
 
-Pi 的通用 ToolDefinition 当前没有统一的只读元数据，所以第三方/MCP 工具由用户在 Ask 列中显式授权。应只启用读取、搜索、列出、获取和检查类操作。三种模式共享一个会话内稳定的 provider-visible 工具目录；切换 Ask 只更新当前 allowlist，不再删除或重排 active tools。实际权限由 fail-closed `tool_call` gate 强制执行，Ask 自身的拦截仍作为 defense in depth。OpenAI Responses 请求还会用 `allowed_tools` 或 `none` 限制模型可选择的工具。
+原生 `bash` 是有意开放的例外：不少 Skill 会通过 Bash 运行自己的只读检查命令，如果在 Ask/Plan 中按工具名硬禁用，Skill 会在开始调查前就失败。固定 system prompt 会明确要求 `bash` 只能用于 Skill 所需命令或读取、搜索、列出、检查现有状态；禁止通过重定向、`tee`、原地修改参数、生成脚本、patch、formatter、generator、包管理器或 Git 写操作创建、编辑、移动、重命名或删除文件。命令副作用不确定时不得执行。
+
+Pi 的通用 ToolDefinition 当前没有统一的只读元数据，所以第三方/MCP 工具由用户在 Ask 列中显式授权。应只启用读取、搜索、列出、获取和检查类操作。三种模式共享一个会话内稳定的 provider-visible 工具目录；切换 Ask 只更新当前 allowlist，不再删除或重排 active tools。实际权限由 fail-closed `tool_call` gate 在工具名层面强制执行，Ask 自身的拦截仍作为 defense in depth。OpenAI Responses 请求还会用 `allowed_tools` 或 `none` 限制模型可选择的工具。
 
 ### 模式选择与快捷键
 
@@ -152,8 +154,8 @@ Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后
 ### Profile 语义
 
 - `normal`：普通会话以及批准计划后的执行阶段使用的持久工具 allowlist、模型和思考强度。
-- `ask`：严格只读问答模式，使用 Ask 列的持久工具 allowlist，并继承 Normal 的模型和 effort。
-- `plan`：Plan Mode 的持久调查工具 allowlist、模型和 effort；`plan_write` 锁定为必选。
+- `ask`：只读问答模式，使用 Ask 列的持久工具 allowlist，并继承 Normal 的模型和 effort；默认开放 `bash` 供 Skill 和只读检查使用，但禁止通过它修改文件或状态。
+- `plan`：Plan Mode 的持久调查工具 allowlist、模型和 effort；默认开放 `bash` 供 Skill 和只读仓库调查使用，`plan_write` 锁定为唯一可写计划工件的必选工具。
 
 插件只注入一段固定、无品牌标记的自然语言 system suffix，Ask 的只读约束和 Plan 的流程约束都位于这个稳定前缀中。当前 `mode`、`workflowStage`、`allowedTools` 以及计划 revision/hash 通过 `context` hook 作为末尾隐藏 custom message 在每次 provider call 前临时加入；它不会写入 session history，也不会改写 system prompt。工具被选入 allowlist 只代表当前可调用，任何越权调用仍会被运行时阻止。
 
@@ -178,7 +180,7 @@ Pi 默认把 `Shift+Tab` 用于循环 thinking level。`pi-only-tools` 启用后
 export PI_ONLY_TOOLS_ALLOWED_TOOLS=off
 ```
 
-`allowed_tools` 是模型侧约束；真正的权限边界始终是 fail-closed `tool_call` gate。
+`allowed_tools` 是模型侧约束；真正的工具名权限边界始终是 fail-closed `tool_call` gate。它不会解析 `bash` 命令语义，因此 Ask/Plan 的 Bash 禁写要求属于模型策略，而不是命令级沙箱。
 
 ### 旧配置迁移
 
@@ -191,13 +193,17 @@ export PI_ONLY_TOOLS_ALLOWED_TOOLS=off
 }
 ```
 
-以及 version 2/3 的 Normal/Plan 配置都会自动迁移为 version 4：
+以及 version 2/3/4/5 的 Profile 配置都会自动迁移为 version 6：
 
-- 保留 Normal 与 Plan allowlist；
-- 新增持久 Ask allowlist，默认启用核心读取工具；
+- 保留 Normal、Ask 与 Plan 的既有 allowlist；
+- 缺少 Ask Profile 时新增持久 Ask allowlist；
+- version 4 及更早配置会一次性加入集成的 `web_search`；
+- version 5 及更早配置会一次性把 `bash` 加入 Ask 与 Plan，供 Skill 和只读调查使用；
 - 清理旧版 `ExitPlanMode`；
-- 清理 Ask 中已知的命令/编辑工具；
+- 清理 Ask 中已知的编辑、替代命令执行和工作流控制工具；
 - 原永久禁用项会从所有 Profile 中移除。
+
+迁移保存为 version 6 后，用户再次从 Ask 或 Plan 取消 `bash` 会被尊重，不会在后续启动中重新强制加入。
 
 Ask 的当前开关会按 session branch 保存，以便切换会话树时恢复正确模式。
 
@@ -377,9 +383,11 @@ plan_write
 ## 安全说明
 
 - Extension 与 shell 命令拥有当前用户权限。
-- `shell_command` 可以执行任意命令。
+- `shell_command` 和原生 `bash` 都可以执行任意命令；插件不会沙箱化它们。
 - `apply_patch` 是本机命令，不由本插件提供或沙箱化。
-- Ask Mode 会移除已知命令/编辑工具，并再次拦截 Ask allowlist 之外的 `tool_call`；第三方/MCP 工具的只读属性由用户在 `/only-tools` 中显式配置。
-- Ask Mode 不是操作系统沙箱，也不约束用户手动执行的命令。
+- Ask Mode 会移除已知编辑工具、`shell_command`、PowerShell 和工作流控制工具，并再次拦截 Ask allowlist 之外的 `tool_call`；原生 `bash` 为 Skill 兼容而保留，其禁止写入要求由 system prompt 约束。
+- Plan Mode 同样允许原生 `bash` 做只读调查；除 `plan_write` 写入 canonical plan 外，prompt 明确禁止修改项目文件和状态。
+- 第三方/MCP 工具的只读属性由用户在 `/only-tools` 中显式配置。
+- Ask/Plan Mode 不是操作系统沙箱，也没有命令级 AST 或路径权限检查；模型一旦违反 Bash prompt，工具名 gate 无法阻止已允许的 Bash 命令产生副作用。
 - 工具启用设置只改变模型可见的工具集，不构成操作系统安全边界。
 - 安装前应审查 `src/entry.js`、`src/tool-renderer-delegation.js`、`src/codex-shell-command.js`、`src/index.js` 或 `dist/index.js`。
