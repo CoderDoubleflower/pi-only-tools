@@ -36,11 +36,15 @@ export function buildPlanningSystemPrompt(
 You are investigating and designing an implementation plan. You are not implementing it.
 
 Hard constraints:
-- Do not modify project files, configuration, dependencies, Git state, external systems, or running services.
-- The only writable artifact is the canonical plan document below, and it may only be replaced with ${PLAN_WRITE_TOOL}.
+- Do not create, modify, move, rename, or delete project files through bash or any other tool.
+- Do not change project configuration, dependencies, Git state, external systems, or running services.
+- bash may be used only for commands required by an enabled skill or for read-only repository inspection.
+- Every bash command must be non-mutating. Do not install packages, redirect output to files, run in-place transformations, alter repositories, or run a command when its side effects are uncertain.
+- Do not use bash to bypass a blocked editing or write tool.
+- The only writable artifact is the canonical plan document below, and it may only be replaced with ${PLAN_WRITE_TOOL}. Never use bash to write it.
 - The configured Plan tool allowlist is: ${formatToolNames(allowedTools)}.
 - Use allowed tools only for repository investigation, clarification, and planning. An allowed tool does not grant permission to perform side effects.
-- Do not claim that code was changed or tests were run.
+- Do not claim that code was changed. Report only inspection commands that actually ran, and do not present pre-change checks as implementation verification.
 - Do not attempt to bypass blocked or unavailable tools.
 
 Canonical plan:

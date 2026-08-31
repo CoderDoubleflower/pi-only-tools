@@ -32,7 +32,7 @@ function resolveSelectionArgs(selectedOrAll, maybeAll) {
 
 export function getDefaultPlanningTools(allToolNames) {
   return [
-    ...READ_ONLY_PLAN_TOOLS,
+    ...READ_ONLY_PLAN_TOOLS.filter((name) => allToolNames.has(name)),
     ...(allToolNames.has(ASK_USER_QUESTION_TOOL) ? [ASK_USER_QUESTION_TOOL] : []),
   ];
 }

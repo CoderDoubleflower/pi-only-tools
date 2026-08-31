@@ -4,8 +4,10 @@ import path from "node:path";
 import { DEFAULT_ASK_TOOLS, normalizeAskTools } from "./ask-mode-policy.js";
 import { LEGACY_EXIT_PLAN_MODE_TOOL } from "./plan/constants.js";
 
-export const PROFILE_CONFIG_VERSION = 4;
+export const PROFILE_CONFIG_VERSION = 6;
 export const PROFILE_NAMES = Object.freeze(["normal", "ask", "plan"]);
+const V5_INTEGRATED_TOOLS = Object.freeze(["web_search"]);
+const V6_BASH_PROFILES = Object.freeze(["ask", "plan"]);
 
 export function normalizeToolNames(values) {
   const result = [];
@@ -87,6 +89,28 @@ function normalizeProfileObject(value, defaults, warnings, source) {
   return profiles;
 }
 
+function addToolsToProfiles(profiles, profileNames, toolNames) {
+  let changed = false;
+  for (const profile of profileNames) {
+    const selected = profiles[profile];
+    if (!Array.isArray(selected)) continue;
+    for (const toolName of toolNames) {
+      if (selected.includes(toolName)) continue;
+      selected.push(toolName);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function addV5IntegratedTools(profiles) {
+  return addToolsToProfiles(profiles, PROFILE_NAMES, V5_INTEGRATED_TOOLS);
+}
+
+function addV6BashAccess(profiles) {
+  return addToolsToProfiles(profiles, V6_BASH_PROFILES, ["bash"]);
+}
+
 export async function loadProfileConfig(configPath, defaults = {}) {
   const warnings = [];
   try {
@@ -96,7 +120,7 @@ export async function loadProfileConfig(configPath, defaults = {}) {
     }
 
     if (
-      [2, 3, PROFILE_CONFIG_VERSION].includes(parsed.version) &&
+      [2, 3, 4, 5, PROFILE_CONFIG_VERSION].includes(parsed.version) &&
       parsed.profiles &&
       typeof parsed.profiles === "object"
     ) {
@@ -125,6 +149,11 @@ export async function loadProfileConfig(configPath, defaults = {}) {
       const hadBlockedAskTools = askRaw.some(
         (name) => !normalizedProfiles.ask.includes(name),
       );
+      const addedIntegratedTools =
+        parsed.version < 5 && addV5IntegratedTools(normalizedProfiles);
+      const addedBashAccess =
+        parsed.version < PROFILE_CONFIG_VERSION &&
+        addV6BashAccess(normalizedProfiles);
 
       if (hadExecutionProfile) {
         warnings.push(
@@ -134,6 +163,16 @@ export async function loadProfileConfig(configPath, defaults = {}) {
       if (!hadAskProfile) {
         warnings.push(
           `${configPath}: added the persistent Ask profile with safe read-only defaults.`,
+        );
+      }
+      if (addedIntegratedTools) {
+        warnings.push(
+          `${configPath}: added the integrated web_search tool to Normal, Ask, and Plan profiles.`,
+        );
+      }
+      if (addedBashAccess) {
+        warnings.push(
+          `${configPath}: added bash to Ask and Plan profiles for skill-compatible read-only inspection.`,
         );
       }
       if (parsed.version !== PROFILE_CONFIG_VERSION) {
@@ -152,7 +191,9 @@ export async function loadProfileConfig(configPath, defaults = {}) {
           hadExecutionProfile ||
           !hadAskProfile ||
           hadLegacyExit ||
-          hadBlockedAskTools,
+          hadBlockedAskTools ||
+          addedIntegratedTools ||
+          addedBashAccess,
       };
     }
 
@@ -166,6 +207,10 @@ export async function loadProfileConfig(configPath, defaults = {}) {
         defaultProfileTools(profile, defaults),
       ).filter((name) => !legacyDisabled.has(name));
     }
+    const addedIntegratedTools =
+      !legacyDisabled.has("web_search") && addV5IntegratedTools(migratedProfiles);
+    const addedBashAccess =
+      !legacyDisabled.has("bash") && addV6BashAccess(migratedProfiles);
     if (legacyDisabled.size > 0 || parsed.version === 1) {
       warnings.push(
         `${configPath}: migrated legacy permanentlyDisabledTools into profile allowlists.`,
@@ -174,6 +219,16 @@ export async function loadProfileConfig(configPath, defaults = {}) {
     warnings.push(
       `${configPath}: added the persistent Ask profile with safe read-only defaults.`,
     );
+    if (addedIntegratedTools) {
+      warnings.push(
+        `${configPath}: added the integrated web_search tool to Normal, Ask, and Plan profiles.`,
+      );
+    }
+    if (addedBashAccess) {
+      warnings.push(
+        `${configPath}: added bash to Ask and Plan profiles for skill-compatible read-only inspection.`,
+      );
+    }
     return {
       config: createProfileConfig(migratedProfiles),
       warnings,

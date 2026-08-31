@@ -8,7 +8,17 @@ export const ASK_USER_QUESTION_TOOL = "ask_user_question";
 export const LEGACY_EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
 export const EXIT_PLAN_MODE_TOOL = LEGACY_EXIT_PLAN_MODE_TOOL;
 
-export const READ_ONLY_PLAN_TOOLS = ["read", "grep", "find", "ls"];
+// `bash` is intentionally available for skill compatibility. Ask/Plan keep it
+// behaviorally read-only through their system prompts; unlike the other entries,
+// the tool itself is not intrinsically read-only.
+export const READ_ONLY_PLAN_TOOLS = [
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "web_search",
+  "bash",
+];
 export const PLAN_STATE_ENTRY = "claude-plan-mode-state";
 export const PLAN_HANDOFF_MESSAGE = "claude-plan-mode-handoff";
 export const PLAN_CONTINUE_MESSAGE = "claude-plan-mode-continuation";

@@ -1,0 +1,8 @@
+{
+  "mode": "live",
+  "contextSize": "medium",
+  "allowedDomains": [],
+  "maxOutputTokens": 8000,
+  "timeoutMs": 60000,
+  "includeRecentContext": true
+}

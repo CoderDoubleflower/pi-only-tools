@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a Codex-compatible standalone `web_search` tool with batched search/navigation commands, current-model authentication, bounded recent context, structured response metadata, and regression coverage.
+- Allow the native `bash` tool in Ask and Plan by default so enabled Skills can run their required inspection commands; keep `shell_command`, `apply_patch`, PowerShell, edit/write, and workflow-control tools blocked in Ask.
+- Strengthen the stable and legacy Ask/Plan prompts so every Bash command must remain non-mutating and must not create, edit, move, rename, or delete files, alter Git/config/dependencies, redirect output to files, or bypass blocked write tools.
+- Upgrade profile configuration to version 6, adding `web_search` to legacy profiles and adding `bash` once to Ask/Plan while preserving later user removals.
 - Remove `renderCall`, `renderResult`, and `renderShell: "self"` from the production `shell_command` and `apply_patch` definitions so the active TUI owns their presentation; `pi-open-tui` can now apply its shared OpenAI-style renderer without competing tool-local framing.
 - Keep the specialized `EnterPlanMode` and `plan_write` renderers unchanged because they own Plan-specific streaming and Markdown presentation rather than generic shell/patch chrome.
 - Keep one provider-visible tool catalog for the extension/session lifetime; Normal, Ask, and Plan now change runtime allowlists instead of replacing the `tools` array.
@@ -15,10 +19,9 @@
 - Add a persistent Ask tool profile beside Normal and Plan in `/only-tools`; Ask model and effort inherit Normal.
 - Add one `/mode` selector for Normal, Ask, and Plan, and remove the separate `/ask` command family.
 - Keep Shift+Tab as one global mode cycle: Normal → Ask → Plan → Normal, while preserving the idle-only switching guard.
-- Make the Ask column an explicit user-maintained allowlist for read-only third-party/MCP tools while locking known shell, edit, write, patch, and Plan-control tools off.
+- Make the Ask column an explicit user-maintained allowlist for read-only third-party/MCP tools while locking known write, alternate-shell, patch, and Plan-control tools off.
 - Enforce Ask permissions through the shared runtime allowlist gate and retain the Ask-specific `tool_call` check as defense in depth.
 - Move Ask read-only behavior into the fixed natural-language mode policy; the ephemeral runtime-state message carries the active mode and allowed tool names.
-- Upgrade profile configuration to version 4 and migrate existing Normal/Plan files with a safe default Ask profile.
 - Stream the growing `plan_write.content` Markdown in the TUI while tool arguments are generated, without writing partial content to the canonical plan file.
 - Make visible plan titles, headings, step labels, and prose follow the user's language; validate localized plans by semantic H2 order while preserving legacy English plans.
 - Fix automatic Plan review dispatch so `agent_settled` routes through Pi's command pipeline and receives a command-capable context instead of calling `/plan-approve` with an event context.
