@@ -3,6 +3,7 @@ import {
   __test as codexShellTest,
   createCodexShellExtensionApi,
 } from "./codex-shell-command.js";
+import { registerCodexWebSearch } from "./codex-web-search.js";
 import { createPlanToolUiExtensionApi } from "./plan-tool-ui.js";
 import { createToolRendererDelegationApi } from "./tool-renderer-delegation.js";
 
@@ -34,6 +35,7 @@ export default function piOnlyTools(pi) {
   const profileCommandApi = createProfileCommandDescriptionApi(codexShellApi);
   const planToolUiApi = createPlanToolUiExtensionApi(profileCommandApi);
   const delegatedToolUiApi = createToolRendererDelegationApi(planToolUiApi);
+  registerCodexWebSearch(delegatedToolUiApi);
   return basePlugin(delegatedToolUiApi);
 }
 
