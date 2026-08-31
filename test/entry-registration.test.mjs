@@ -72,9 +72,13 @@ plugin({
   on() {},
 });
 
-assert.deepEqual([...tools.keys()], ["shell_command", "apply_patch"]);
+assert.deepEqual([...tools.keys()], ["web_search", "shell_command", "apply_patch"]);
+const webSearch = tools.get("web_search");
 const shell = tools.get("shell_command");
 const patch = tools.get("apply_patch");
+assert.equal(webSearch.renderShell, "self");
+assert.equal(typeof webSearch.renderCall, "function");
+assert.equal(typeof webSearch.renderResult, "function");
 assert.match(shell.description, /1 MiB/);
 assert.match(shell.description, /10,000 tokens/);
 for (const [name, tool] of [["shell_command", shell], ["apply_patch", patch]]) {
@@ -130,6 +134,9 @@ for (const name of loadingActions) {
   };
 }
 assert.doesNotThrow(() => plugin(loadOnlyApi));
+assert.equal(loadOnlyTools.get("web_search").renderShell, "self");
+assert.equal(typeof loadOnlyTools.get("web_search").renderCall, "function");
+assert.equal(typeof loadOnlyTools.get("web_search").renderResult, "function");
 for (const toolName of ["shell_command", "apply_patch"]) {
   const tool = loadOnlyTools.get(toolName);
   assert.equal(Object.hasOwn(tool, "renderCall"), false);
