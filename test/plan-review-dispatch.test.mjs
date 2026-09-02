@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createPlanToolUiExtensionApi } from "../src/plan-tool-ui.js";
+import { PLAN_HANDOFF_MESSAGE } from "../src/plan/constants.js";
 
 const handlers = new Map();
 const commands = new Map();
@@ -7,6 +8,8 @@ const tools = new Map();
 const dispatchedCommands = [];
 const pendingDispatches = [];
 const reviewPrompts = [];
+const sameSessionMessages = [];
+const freshSessionMessages = [];
 let waitForIdleCalls = 0;
 
 const eventCtx = {
@@ -26,7 +29,17 @@ const commandCtx = {
   waitForIdle: async () => {
     waitForIdleCalls += 1;
   },
-  newSession: async () => ({ cancelled: true }),
+  newSession: async (options) => {
+    if (typeof options?.withSession === "function") {
+      await options.withSession({
+        sendMessage(message, sendOptions) {
+          freshSessionMessages.push({ message, options: sendOptions });
+        },
+        ui: eventCtx.ui,
+      });
+    }
+    return { cancelled: false };
+  },
 };
 
 const rawPi = {
@@ -41,7 +54,9 @@ const rawPi = {
   registerCommand(name, command) {
     commands.set(name, command);
   },
-  sendMessage() {},
+  sendMessage(message, options) {
+    sameSessionMessages.push({ message, options });
+  },
   sendUserMessage(content, options) {
     assert.equal(options?.expandPromptTemplates, true);
     assert.equal(typeof content, "string");
@@ -131,4 +146,44 @@ assert.deepEqual(dispatchedCommands, [{ name: "plan-approve", args: "" }]);
 assert.equal(waitForIdleCalls, 1);
 assert.equal(reviewPrompts.length, 1);
 assert.ok(reviewPrompts[0].choices.includes("Keep reviewing for now"));
-console.log("Plan review command-context dispatch regression test passed");
+
+pi.sendMessage({
+  customType: PLAN_HANDOFF_MESSAGE,
+  content: "same-session approved plan",
+  display: true,
+  details: { clearContext: false },
+});
+assert.equal(
+  sameSessionMessages.at(-1).message.display,
+  false,
+  "same-session handoffs must remain hidden to avoid repeating the rendered plan",
+);
+
+pi.registerCommand("test-fresh-plan-handoff", {
+  description: "Exercise the fresh-session handoff wrapper",
+  handler: async (_args, ctx) =>
+    ctx.newSession({
+      withSession: async (newContext) => {
+        await newContext.sendMessage(
+          {
+            customType: PLAN_HANDOFF_MESSAGE,
+            content: "fresh-session approved plan",
+            display: true,
+            details: { clearContext: true },
+          },
+          { triggerTurn: true },
+        );
+      },
+    }),
+});
+await commands.get("test-fresh-plan-handoff").handler("", commandCtx);
+assert.equal(freshSessionMessages.length, 1);
+assert.equal(
+  freshSessionMessages[0].message.display,
+  true,
+  "fresh-session handoffs must stay visible before execution starts",
+);
+assert.equal(freshSessionMessages[0].options.triggerTurn, true);
+assert.equal(freshSessionMessages[0].message.content, "fresh-session approved plan");
+
+console.log("Plan review command-context and handoff visibility regressions passed");
