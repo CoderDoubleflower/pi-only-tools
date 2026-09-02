@@ -227,6 +227,9 @@ function hidePlanHandoff(message) {
   if (!message || typeof message !== "object" || message.customType !== PLAN_HANDOFF_MESSAGE) {
     return message;
   }
+  if (message.details?.clearContext === true) {
+    return message;
+  }
   return { ...message, display: false };
 }
 
