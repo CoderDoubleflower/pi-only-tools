@@ -2,11 +2,6 @@ export const MODE_STATE_CUSTOM_TYPE = "pi-only-tools-runtime-state";
 export const MODE_STATE_SCHEMA_VERSION = 1;
 
 const PROFILE_NAMES = new Set(["normal", "ask", "plan"]);
-const RUNTIME_STATE_OPEN_TAG = "<pi-only-tools-runtime-state>";
-const TOOL_OUTPUT_ITEM_TYPES = new Set([
-  "function_call_output",
-  "custom_tool_call_output",
-]);
 const STABLE_MODE_SYSTEM_PROMPT_SENTINEL =
   "Pi exposes one stable tool catalog for the whole session.";
 
@@ -88,11 +83,6 @@ function uniqueToolNames(values) {
   return result;
 }
 
-function disabledSetting(value) {
-  const setting = String(value ?? "").trim().toLowerCase();
-  return ["0", "false", "off", "disabled"].includes(setting);
-}
-
 function runtimeProfile(toolProfiles, planMode, stage) {
   if (stage === "planning" || stage === "ready") return "plan";
   const reported = planMode?.getMode?.() ?? toolProfiles?.mode ?? "normal";
@@ -148,7 +138,7 @@ export function runtimePolicyFingerprint(snapshot) {
 }
 
 export function buildRuntimeStateMessage(snapshot) {
-  return `${RUNTIME_STATE_OPEN_TAG}\n${JSON.stringify(snapshot, null, 2)}\n</pi-only-tools-runtime-state>`;
+  return `<pi-only-tools-runtime-state>\n${JSON.stringify(snapshot, null, 2)}\n</pi-only-tools-runtime-state>`;
 }
 
 export function appendStableModeSystemPrompt(systemPrompt) {
@@ -178,164 +168,10 @@ export function appendRuntimeStateMessage(messages, snapshot, timestamp = Date.n
   ];
 }
 
-function supportsExplicitPromptCache(modelId) {
-  const match = String(modelId ?? "").match(
-    /(?:^|[^a-z0-9])gpt-(\d+)(?:\.(\d+))?(?=$|[^0-9])/i,
-  );
-  if (!match) return false;
-  const major = Number(match[1]);
-  const minor = match[2] === undefined ? 0 : Number(match[2]);
-  return major > 5 || (major === 5 && minor >= 6);
-}
-
-function promptCacheBreakpointFeatureEnabled(payload, model, env = process.env) {
-  if (model?.api !== "openai-responses" || !isRecord(payload)) return false;
-  if (disabledSetting(env?.PI_ONLY_TOOLS_PROMPT_CACHE_BREAKPOINTS)) return false;
-
-  // Pi uses explicit mode without breakpoints to honor cacheRetention=none.
-  // Never turn caching back on when the caller deliberately disabled implicit caching.
-  if (
-    isRecord(payload.prompt_cache_options) &&
-    payload.prompt_cache_options.mode === "explicit"
-  ) {
-    return false;
-  }
-
-  const modelId = typeof payload.model === "string" ? payload.model : model?.id;
-  return supportsExplicitPromptCache(modelId);
-}
-
-function isRuntimeStateText(value) {
-  return typeof value === "string" && value.startsWith(RUNTIME_STATE_OPEN_TAG);
-}
-
-function isRuntimeStateInputItem(item) {
-  if (!isRecord(item) || item.role !== "user") return false;
-  if (isRuntimeStateText(item.content)) return true;
-  return (
-    Array.isArray(item.content) &&
-    item.content.some(
-      (block) =>
-        isRecord(block) &&
-        block.type === "input_text" &&
-        isRuntimeStateText(block.text),
-    )
-  );
-}
-
-function countPromptCacheBreakpoints(input) {
-  let count = 0;
-  for (const item of input ?? []) {
-    if (!isRecord(item)) continue;
-    for (const field of ["content", "output"]) {
-      const blocks = item[field];
-      if (!Array.isArray(blocks)) continue;
-      for (const block of blocks) {
-        if (isRecord(block) && block.prompt_cache_breakpoint !== undefined) {
-          count += 1;
-        }
-      }
-    }
-  }
-  return count;
-}
-
-function addBreakpointToTextField(item, field) {
-  const value = item[field];
-  if (typeof value === "string") {
-    return {
-      supported: true,
-      changed: true,
-      item: {
-        ...item,
-        [field]: [
-          {
-            type: "input_text",
-            text: value,
-            prompt_cache_breakpoint: { mode: "explicit" },
-          },
-        ],
-      },
-    };
-  }
-
-  if (!Array.isArray(value)) {
-    return { supported: false, changed: false, item };
-  }
-
-  for (let index = value.length - 1; index >= 0; index -= 1) {
-    const block = value[index];
-    if (
-      !isRecord(block) ||
-      block.type !== "input_text" ||
-      typeof block.text !== "string"
-    ) {
-      continue;
-    }
-    if (block.prompt_cache_breakpoint !== undefined) {
-      return { supported: true, changed: false, item };
-    }
-
-    const blocks = [...value];
-    blocks[index] = {
-      ...block,
-      prompt_cache_breakpoint: { mode: "explicit" },
-    };
-    return {
-      supported: true,
-      changed: true,
-      item: { ...item, [field]: blocks },
-    };
-  }
-
-  return { supported: false, changed: false, item };
-}
-
-export function rewriteOpenAIResponsesPromptCacheBreakpoint(
-  payload,
-  model,
-  env = process.env,
-) {
-  if (!promptCacheBreakpointFeatureEnabled(payload, model, env)) return payload;
-  if (!Array.isArray(payload.input) || payload.input.length < 2) return payload;
-
-  const runtimeStateIndex = payload.input.length - 1;
-  if (!isRuntimeStateInputItem(payload.input[runtimeStateIndex])) return payload;
-
-  // Implicit mode consumes one of GPT-5.6's four write slots, leaving at most
-  // three explicit markers. Preserve upstream markers instead of exceeding it.
-  const existingBreakpoints = countPromptCacheBreakpoints(payload.input);
-  const explicitBreakpointLimit = 3;
-
-  for (let index = runtimeStateIndex - 1; index >= 0; index -= 1) {
-    const item = payload.input[index];
-    if (!isRecord(item)) continue;
-
-    let result;
-    if (item.role === "user") {
-      result = addBreakpointToTextField(item, "content");
-    } else if (TOOL_OUTPUT_ITEM_TYPES.has(item.type)) {
-      result = addBreakpointToTextField(item, "output");
-    } else {
-      continue;
-    }
-
-    if (!result.supported) continue;
-    if (!result.changed || existingBreakpoints >= explicitBreakpointLimit) {
-      return payload;
-    }
-
-    const input = [...payload.input];
-    input[index] = result.item;
-    return { ...payload, input };
-  }
-
-  return payload;
-}
-
 function allowedToolsFeatureEnabled(model, env = process.env) {
   if (model?.api !== "openai-responses") return false;
-  return !disabledSetting(env?.PI_ONLY_TOOLS_ALLOWED_TOOLS);
+  const setting = String(env?.PI_ONLY_TOOLS_ALLOWED_TOOLS ?? "").trim().toLowerCase();
+  return !["0", "false", "off", "disabled"].includes(setting);
 }
 
 function allowedToolsMode(choice) {
@@ -447,12 +283,8 @@ export function registerCacheStableModeRuntime(pi, options) {
 
   pi.on("before_provider_request", (event, ctx) => {
     const current = snapshot();
-    let rewritten = rewriteOpenAIResponsesPromptCacheBreakpoint(
+    const rewritten = rewriteOpenAIResponsesToolChoice(
       event.payload,
-      ctx.model,
-    );
-    rewritten = rewriteOpenAIResponsesToolChoice(
-      rewritten,
       current.allowedTools,
       ctx.model,
     );
@@ -465,12 +297,8 @@ export function registerCacheStableModeRuntime(pi, options) {
 export const __test = {
   allowedToolsFeatureEnabled,
   allowedToolsMode,
-  countPromptCacheBreakpoints,
-  isRuntimeStateInputItem,
   modeLabel,
-  promptCacheBreakpointFeatureEnabled,
   runtimeProfile,
   specificFunctionChoiceName,
-  supportsExplicitPromptCache,
   uniqueToolNames,
 };
