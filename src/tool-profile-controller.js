@@ -23,7 +23,7 @@ export class ToolProfileController {
     this.catalog = [];
     this.catalogInitialized = false;
     // Extension action methods are unavailable while extensions are being loaded.
-    // The normal profile is initialized from runtime state during session_start instead.
+    // The complete session catalog is frozen from runtime state at session_start.
     const initial = uniqueToolNames(options.initialTools ?? []);
     this.profiles = new Map([
       ["normal", initial],
@@ -72,16 +72,28 @@ export class ToolProfileController {
     return new Set(this.getRegisteredTools());
   }
 
+  getCatalogToolNames() {
+    return new Set(this.catalogInitialized ? this.catalog : this.getRegisteredTools());
+  }
+
   getUnavailableTools(names) {
     const registered = this.getRegisteredToolNames();
-    return uniqueToolNames(names).flatMap((name) =>
-      registered.has(name) ? [] : [{ name, reason: "not registered" }],
-    );
+    const catalog = this.getCatalogToolNames();
+    return uniqueToolNames(names).flatMap((name) => {
+      if (!registered.has(name)) return [{ name, reason: "not registered" }];
+      if (this.catalogInitialized && !catalog.has(name)) {
+        return [{ name, reason: "not in the frozen session catalog; reload or start a new session" }];
+      }
+      return [];
+    });
   }
 
   getEffectiveTools(profile = this.mode) {
     const registered = this.getRegisteredToolNames();
-    return this.getRequestedTools(profile).filter((name) => registered.has(name));
+    const catalog = this.getCatalogToolNames();
+    return this.getRequestedTools(profile).filter(
+      (name) => registered.has(name) && catalog.has(name),
+    );
   }
 
   getDesiredCatalogTools() {
@@ -92,28 +104,20 @@ export class ToolProfileController {
     return this.getRegisteredTools().filter((name) => desired.has(name));
   }
 
+  // The provider-visible catalog is one ordered snapshot of every tool
+  // registered at the session boundary. Mode/profile changes only alter the
+  // runtime allowlist; they never add, remove, or reorder tool definitions.
   refreshCatalog() {
-    const registered = new Set(this.getRegisteredTools());
-    const desired = this.getDesiredCatalogTools();
-
     if (!this.catalogInitialized) {
-      this.catalog = desired;
+      this.catalog = this.getRegisteredTools();
       this.catalogInitialized = true;
-      return [...this.catalog];
-    }
-
-    // Keep the catalog monotonic within one extension/session lifetime. Removing a
-    // tool from a profile only changes the runtime allowlist; it must not rewrite
-    // the provider-visible tool prefix. Newly selected tools append in registry
-    // order so the existing prefix remains reusable.
-    this.catalog = this.catalog.filter((name) => registered.has(name));
-    const current = new Set(this.catalog);
-    for (const name of desired) {
-      if (current.has(name)) continue;
-      current.add(name);
-      this.catalog.push(name);
     }
     return [...this.catalog];
+  }
+
+  resetCatalog() {
+    this.catalog = [];
+    this.catalogInitialized = false;
   }
 
   getCatalogTools() {
