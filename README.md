@@ -31,7 +31,6 @@
 - Normal、Ask、Plan 共享一个会话内稳定的 provider-visible 工具目录，切换模式只改变当前 allowlist。
 - 工具权限由 fail-closed `tool_call` gate 强制执行；OpenAI Responses 请求还会使用 `tool_choice.allowed_tools` 或 `none` 限制模型选择范围。
 - 新启用工具按 Pi registry 顺序追加，取消权限或切换模式不会删除、重排已有目录项。
-- GPT-5.6+ 的 OpenAI Responses 请求会在动态 runtime-state 之前，为最新的真实 user 文本或 text tool result 添加显式 Prompt Cache 断点；工具续轮优先标记 tool result，使滚动历史继续形成可复用前缀，同时保留默认 implicit caching。
 - `shell_command` 与 `apply_patch` 不再注册固定的工具渲染器；安装 [`pi-open-tui`](https://github.com/CoderDoubleflower/pi-open-tui) 时由它统一渲染，未安装时回退到 Pi 的标准工具外框。
 
 ## 安装
@@ -288,9 +287,8 @@ export PI_ONLY_TOOLS_WEB_SEARCH_CONFIG=/absolute/path/to/web-search.json
 | `PI_ONLY_TOOLS_SHELL` | 覆盖 Unix shell |
 | `PI_ONLY_TOOLS_WEB_SEARCH_CONFIG` | 指定 Web Search 配置文件 |
 | `PI_ONLY_TOOLS_ALLOWED_TOOLS=off` | 关闭 Responses payload 的 `allowed_tools`，保留运行时 gate |
-| `PI_ONLY_TOOLS_PROMPT_CACHE_BREAKPOINTS=off` | 关闭 GPT-5.6+ Responses payload 的显式 Prompt Cache 断点改写 |
 
-只有确实不支持 `tool_choice.allowed_tools` 的兼容网关才应关闭 `PI_ONLY_TOOLS_ALLOWED_TOOLS`。如果兼容网关拒绝 `prompt_cache_breakpoint` 字段，可以单独关闭 `PI_ONLY_TOOLS_PROMPT_CACHE_BREAKPOINTS`，不影响稳定工具目录和运行时权限 gate。
+只有确实不支持 `tool_choice.allowed_tools` 的兼容网关才应关闭该字段。
 
 ## 安全说明
 

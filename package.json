@@ -15,7 +15,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "find src -name '*.js' -print0 | xargs -0 -n1 node --check && node --check dist/index.js",
-    "test": "node test/test.mjs && node test/render-lines.test.mjs && node test/entry-registration.test.mjs && node test/web-search-model.test.mjs && node test/web-search-tool.test.mjs && node test/read-only-bash-policy.test.mjs && node test/plan-store.test.mjs && node test/plan-render.test.mjs && node test/plan-review-dispatch.test.mjs && node test/codex-shell-command.test.mjs && node test/tool-profile-controller.test.mjs && node test/cache-stable-mode.test.mjs && node test/prompt-cache-breakpoint.test.mjs && node test/ask-mode.test.mjs && node test/plan-integration.test.mjs && node test/profile-config.test.mjs && node test/profile-matrix.test.mjs",
+    "test": "node test/test.mjs && node test/render-lines.test.mjs && node test/entry-registration.test.mjs && node test/web-search-model.test.mjs && node test/web-search-tool.test.mjs && node test/read-only-bash-policy.test.mjs && node test/plan-store.test.mjs && node test/plan-render.test.mjs && node test/plan-review-dispatch.test.mjs && node test/codex-shell-command.test.mjs && node test/tool-profile-controller.test.mjs && node test/cache-stable-mode.test.mjs && node test/ask-mode.test.mjs && node test/plan-integration.test.mjs && node test/profile-config.test.mjs && node test/profile-matrix.test.mjs",
     "prepack": "npm run build && npm run check"
   },
   "peerDependencies": {

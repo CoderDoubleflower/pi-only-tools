@@ -14,9 +14,6 @@
 - Remove the model-visible `[PI-ONLY-TOOLS MODE PROTOCOL v1]` heading and keep idempotent injection through a natural opening sentence.
 - Enforce the active allowlist fail-closed in every mode, including Normal and Plan-ready, while keeping the existing Ask/Plan checks as defense in depth.
 - Constrain every `api=openai-responses` request with `tool_choice.allowed_tools` or `none` without provider-name filtering or rewriting `tools`; retain `PI_ONLY_TOOLS_ALLOWED_TOOLS=off` for incompatible gateways.
-- Add a GPT-5.6+ explicit prompt-cache breakpoint immediately before the ephemeral runtime-state suffix, preferring the latest text tool result and otherwise the latest real user message, so rolling agent history remains a reusable prefix while implicit caching stays enabled.
-- Preserve `cacheRetention=none`, non-Responses models, older GPT models, upstream breakpoint limits, and incompatible gateways; `PI_ONLY_TOOLS_PROMPT_CACHE_BREAKPOINTS=off` disables only the new breakpoint rewrite.
-- Add rolling multi-turn regression coverage for user and tool-result boundaries, custom tools, string payload normalization, image-only fallback, idempotence, compatibility guards, breakpoint limits, and composition with `allowed_tools`.
 - Add cache-stability tests covering catalog monotonicity, runtime-state replacement, provider payload rewriting, and the Normal/Ask/Plan workflow.
 - Keep Ask and Plan footer statuses in the same leading plugin-status slot by using distinct keys with one shared fixed sort prefix.
 - Add a persistent Ask tool profile beside Normal and Plan in `/only-tools`; Ask model and effort inherit Normal.
