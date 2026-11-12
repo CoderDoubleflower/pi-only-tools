@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isProcessSuccess, waitForProcess } from "./process-lifecycle.js";
 import { constants as fsConstants } from "node:fs";
 import { access, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -192,38 +193,6 @@ function shellInvocation(command) {
   return { executable, args: ["-lc", command] };
 }
 
-function killProcessTree(child) {
-  const pid = child?.pid;
-  if (!pid) return undefined;
-  if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
-    killer.unref();
-    return undefined;
-  }
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      child.kill("SIGTERM");
-    } catch {}
-  }
-  const forceTimer = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      try {
-        child.kill("SIGKILL");
-      } catch {}
-    }
-  }, 750);
-  forceTimer.unref?.();
-  return forceTimer;
-}
-
 function processDetailsSnapshot(kind, cwd, capture, startedAt, overrides = {}) {
   return {
     kind,
@@ -280,16 +249,14 @@ async function runCapturedProcess({
     });
   }
 
+  const completion = waitForProcess(child, { signal, timeoutMs });
+
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
 
   let updateTimer;
   let updateDirty = false;
   let lastUpdateAt = 0;
-  let timedOut = false;
-  let aborted = false;
-  let terminationRequested = false;
-  let forceKillHandle;
 
   const emitUpdate = () => {
     if (!onUpdate || !updateDirty) return;
@@ -334,46 +301,14 @@ async function runCapturedProcess({
     onUpdate({ content: [], details });
   }
 
-  const requestTermination = () => {
-    if (terminationRequested) return;
-    terminationRequested = true;
-    forceKillHandle = killProcessTree(child);
-  };
-  const abortHandler = () => {
-    aborted = true;
-    requestTermination();
-  };
-  if (signal) signal.addEventListener("abort", abortHandler, { once: true });
-
-  let timeoutHandle;
-  if (timeoutMs !== undefined) {
-    timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      requestTermination();
-    }, timeoutMs);
-    timeoutHandle.unref?.();
-  }
-
   if (stdin !== undefined) {
     child.stdin?.on("error", () => {});
     child.stdin?.end(stdin);
   }
 
-  const terminal = await new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-    child.once("error", (error) => finish({ exitCode: null, signal: null, spawnError: error.message }));
-    child.once("close", (exitCode, closeSignal) => finish({ exitCode, signal: closeSignal, spawnError: null }));
-  });
+  const terminal = await completion;
 
-  if (timeoutHandle) clearTimeout(timeoutHandle);
-  if (forceKillHandle) clearTimeout(forceKillHandle);
   if (updateTimer) clearTimeout(updateTimer);
-  if (signal) signal.removeEventListener("abort", abortHandler);
   updateDirty = true;
   emitUpdate();
 
@@ -382,8 +317,8 @@ async function runCapturedProcess({
     exitCode: terminal.exitCode,
     signal: terminal.signal,
     spawnError: terminal.spawnError,
-    timedOut,
-    aborted,
+    timedOut: terminal.timedOut,
+    aborted: terminal.aborted,
     ...detailExtras,
   });
 }
@@ -411,16 +346,6 @@ function finalProcessContent(details, emptySuccessText) {
   if (!output) return status;
   if (!status) return output;
   return `${output}\n\n${status}`;
-}
-
-function isProcessSuccess(details) {
-  return (
-    !details.spawnError &&
-    !details.aborted &&
-    !details.timedOut &&
-    !details.signal &&
-    (details.exitCode === 0 || details.exitCode === null)
-  );
 }
 
 function formatDisplayPath(filePath, cwd) {
@@ -925,7 +850,7 @@ function getBuiltinTools(pi) {
 
 export default function piOnlyTools(pi) {
   pi.on("tool_result", (event) => {
-    if (event.toolName === "shell_command" && event.details && !isProcessSuccess(event.details)) {
+    if (["shell_command", "apply_patch"].includes(event.toolName) && event.details && !isProcessSuccess(event.details)) {
       return { isError: true };
     }
     return undefined;
@@ -967,6 +892,7 @@ export default function piOnlyTools(pi) {
       return {
         content: [{ type: "text", text: finalProcessContent(details, "(No output)") }],
         details,
+        isError: !isProcessSuccess(details),
       };
     },
     renderCall(args, theme) {
@@ -1020,6 +946,7 @@ export default function piOnlyTools(pi) {
       return {
         content: [{ type: "text", text: finalProcessContent(details, "Done") }],
         details,
+        isError: !isProcessSuccess(details),
       };
     },
     renderCall(args, theme, context) {
@@ -1032,7 +959,7 @@ export default function piOnlyTools(pi) {
     },
   });
 
-  const toolProfiles = createToolProfileController(pi, { requiredTools: PLAN_REQUIRED_TOOLS });
+  const toolProfiles = createToolProfileController(pi);
 
   let loadedProfileConfig;
   let planMode;
@@ -1049,7 +976,7 @@ export default function piOnlyTools(pi) {
     return { normal, plan };
   };
 
-  const applyProfileConfig = (config) => {
+  const applyProfileConfig = (config, { unblock = false } = {}) => {
     for (const profile of PROFILE_NAMES) {
       toolProfiles.setProfile(
         profile,
@@ -1057,6 +984,7 @@ export default function piOnlyTools(pi) {
         { apply: false },
       );
     }
+    if (unblock) toolProfiles.setConfigurationBlocked(false);
     return toolProfiles.apply();
   };
 
@@ -1064,9 +992,20 @@ export default function piOnlyTools(pi) {
     const defaults = getProfileDefaults(ctx);
     const loaded = await loadProfileConfig(getToolsConfigPath(), defaults);
     for (const warning of loaded.warnings) ctx.ui.notify(warning, "warning");
-    loadedProfileConfig = loaded.config;
-    if (loaded.migrated) loadedProfileConfig = await saveProfileConfig(getToolsConfigPath(), loadedProfileConfig);
-    applyProfileConfig(loadedProfileConfig);
+    // A broken or newer config must not overwrite the file or widen permissions.
+    // Keep this session's last valid configuration; a fresh session fails closed.
+    if (loaded.error) {
+      if (!loadedProfileConfig) {
+        loadedProfileConfig = loaded.config;
+        toolProfiles.setConfigurationBlocked(true);
+      }
+    } else {
+      loadedProfileConfig = loaded.config;
+    }
+    if (!loaded.error && loaded.migrated) {
+      loadedProfileConfig = await saveProfileConfig(getToolsConfigPath(), loadedProfileConfig);
+    }
+    applyProfileConfig(loadedProfileConfig, { unblock: !loaded.error });
   };
 
   pi.on?.("session_start", async (_event, ctx) => restoreToolState(ctx));
@@ -1083,6 +1022,7 @@ export default function piOnlyTools(pi) {
     });
     if (result.saved && result.config) {
       loadedProfileConfig = result.config;
+      toolProfiles.setConfigurationBlocked(false);
       const normal = new Set(result.config.profiles.normal);
       const builtins = getBuiltinTools(pi);
       await writeDefaultToolsSetting(builtins.map((tool) => tool.name).filter((name) => normal.has(name)));

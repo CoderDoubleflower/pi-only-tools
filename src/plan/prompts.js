@@ -120,3 +120,15 @@ export function buildExecutionSystemPrompt(state) {
 Implement the exact approved plan revision ${state.approved.revision} (${state.approved.hash}).
 Use the implementation tools available in this session. Keep scope stable, verify changes appropriately, and report blockers rather than silently changing the design.`;
 }
+
+export const PLAN_WRITE_DESCRIPTION =
+  "Replace the complete canonical Plan Mode Markdown document. Keep the required semantic H2 order, write every visible heading and explanation in the user's language, and present only the recommended implementation.";
+export const PLAN_WRITE_PROMPT_GUIDELINES = Object.freeze([
+  "Use plan_write only in Plan Mode and pass the complete plan, not a patch or fragment.",
+  "Write every visible plan heading, step title, list label, and explanation in the language used by the user's current request; keep repository identifiers, paths, and commands unchanged.",
+  "Use exactly four required H2 sections in this semantic order: context, current state, numbered implementation steps, and verification. Insert one optional risks/compatibility H2 section before verification only when needed.",
+  "Use H3 headings or lists for additional subdivisions instead of adding more H2 sections.",
+  "Name exact file paths and existing functions, types, or utilities to reuse in the ordered implementation steps.",
+  "Include only the recommended approach; remove alternatives, unresolved options, raw exploration notes, and all template placeholders.",
+  "Keep the plan concise enough to scan and detailed enough to implement without rediscovering the design.",
+]);

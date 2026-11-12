@@ -4,13 +4,15 @@
 
 ## Provider requirement
 
-The active Pi model provider must implement:
+The selected Pi model provider must implement:
 
 ```text
 POST {baseUrl}/alpha/search
 ```
 
-The tool reuses the active model ID, Pi's resolved provider headers/API key, and Pi's global `fetch` dispatcher. OpenAI Codex-compatible providers can use it directly; a generic Responses-compatible gateway that does not expose `alpha/search` will return an HTTP error.
+By default, the tool uses the active model. Set both `provider` and `model` in the search configuration to use a dedicated model registered in Pi. The request uses that model's ID and base URL, Pi's resolved credentials and headers for that model, and Pi's global `fetch` dispatcher. Changing the chat model then leaves the configured search route unchanged.
+
+A Codex-compatible provider exposing this endpoint can serve search requests. Responses API compatibility alone does not imply search support. HTTP 404, 405, and 501 responses produce a specific endpoint-unavailable error with a configuration hint; no separate probe request is sent.
 
 ## Supported commands
 
@@ -35,6 +37,18 @@ Packaged defaults live in `src/web-search/config.json`:
 
 A user override can be placed at `~/.pi/agent/web-search.json` (or the directory selected by `PI_CODING_AGENT_DIR`). Set `PI_ONLY_TOOLS_WEB_SEARCH_CONFIG` to use another file. Override fields are merged over the packaged defaults and take effect after `/reload`.
 
+To separate search from the chat model, add a pair of registered Pi identifiers:
+
+```json
+{
+  "provider": "your-search-provider",
+  "model": "your-search-model",
+  "mode": "live"
+}
+```
+
+Replace both example identifiers with a provider/model pair already registered in Pi and backed by a working `/alpha/search` endpoint. Both fields are required when either is set. An unknown model fails before credentials are resolved or any HTTP request is sent. Omit both fields to inherit the current model; credentials remain managed by Pi, not by this configuration file.
+
 `mode` accepts:
 
 - `disabled`: do not register `web_search`
@@ -46,4 +60,4 @@ A user override can be placed at `~/.pi/agent/web-search.json` (or the directory
 
 ## Tool profiles
 
-`web_search` is treated as a read-only tool and is enabled by default for new Normal, Ask, and Plan profiles. Version 4 and older profile files are migrated once to version 5; after that migration, removing `web_search` from a profile remains respected.
+`web_search` is treated as a read-only tool and is enabled by default for new Normal, Ask, and Plan profiles. Profile schema 6 migrates supported older files, adding `web_search` once where needed and `bash` once to Ask/Plan. Once migrated, later user removals remain respected. Damaged files and unknown schema versions are preserved without automatic recovery to broader default permissions.

@@ -1,15 +1,14 @@
 import { spawn } from "node:child_process";
+import { isProcessSuccess, waitForProcess } from "./process-lifecycle.js";
 import { constants as fsConstants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  CODEX_CAPTURE_MAX_BYTES,
-  HeadByteCapture,
+  HeadTailByteCapture,
   TailByteCapture,
-  aggregateCodexOutput,
   buildRenderDetails,
-  decodeUtf8Lossy,
+  formatCapturedOutputForModel,
   formatExecOutputForModel,
   partialContentText,
 } from "./codex-shell-output.js";
@@ -38,40 +37,6 @@ function shellInvocation(command) {
   return { executable, args: ["-lc", command] };
 }
 
-function killProcessTree(child) {
-  const pid = child?.pid;
-  if (!pid) return undefined;
-  if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
-      windowsHide: true,
-      stdio: "ignore",
-    });
-    killer.unref();
-    return undefined;
-  }
-
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      child.kill("SIGTERM");
-    } catch {}
-  }
-
-  const forceTimer = setTimeout(() => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      try {
-        child.kill("SIGKILL");
-      } catch {}
-    }
-  }, 750);
-  forceTimer.unref?.();
-  return forceTimer;
-}
-
 export async function executeCodexShellCommand(_toolCallId, params, signal, onUpdate, ctx) {
   const command = params.command;
   const cwd = resolveWorkdir(ctx.cwd, params.workdir);
@@ -81,8 +46,8 @@ export async function executeCodexShellCommand(_toolCallId, params, signal, onUp
 
   await assertDirectoryExists(cwd);
 
-  const stdoutCapture = new HeadByteCapture();
-  const stderrCapture = new HeadByteCapture();
+  const stdoutCapture = new HeadTailByteCapture();
+  const stderrCapture = new HeadTailByteCapture();
   const stdoutTail = new TailByteCapture();
   const stderrTail = new TailByteCapture();
 
@@ -109,7 +74,7 @@ export async function executeCodexShellCommand(_toolCallId, params, signal, onUp
       modelOutputOriginalTokens: modelResult.originalTokenCount,
       modelOutputBytes: Buffer.byteLength(modelResult.text, "utf8"),
     });
-    return { content: [{ type: "text", text: modelResult.text }], details };
+    return { content: [{ type: "text", text: modelResult.text }], details, isError: true };
   }
 
   let child;
@@ -144,16 +109,14 @@ export async function executeCodexShellCommand(_toolCallId, params, signal, onUp
       modelOutputOriginalTokens: modelResult.originalTokenCount,
       modelOutputBytes: Buffer.byteLength(modelResult.text, "utf8"),
     });
-    return { content: [{ type: "text", text: modelResult.text }], details };
+    return { content: [{ type: "text", text: modelResult.text }], details, isError: true };
   }
+
+  const completion = waitForProcess(child, { signal, timeoutMs });
 
   let updateTimer;
   let updateDirty = false;
   let lastUpdateAt = 0;
-  let timedOut = false;
-  let aborted = false;
-  let terminationRequested = false;
-  let forceKillHandle;
 
   const snapshotRunningDetails = () =>
     buildRenderDetails({
@@ -215,64 +178,31 @@ export async function executeCodexShellCommand(_toolCallId, params, signal, onUp
 
   if (onUpdate) onUpdate({ content: [], details: snapshotRunningDetails() });
 
-  const requestTermination = () => {
-    if (terminationRequested) return;
-    terminationRequested = true;
-    forceKillHandle = killProcessTree(child);
-  };
-  const abortHandler = () => {
-    aborted = true;
-    requestTermination();
-  };
-  if (signal) signal.addEventListener("abort", abortHandler, { once: true });
+  const terminal = await completion;
 
-  const timeoutHandle = setTimeout(() => {
-    timedOut = true;
-    requestTermination();
-  }, timeoutMs);
-  timeoutHandle.unref?.();
-
-  const terminal = await new Promise((resolve) => {
-    let settled = false;
-    const finish = (value) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-    child.once("error", (error) =>
-      finish({ exitCode: null, signal: null, spawnError: error.message }),
-    );
-    child.once("close", (exitCode, closeSignal) =>
-      finish({ exitCode, signal: closeSignal, spawnError: null }),
-    );
-  });
-
-  clearTimeout(timeoutHandle);
-  if (forceKillHandle) clearTimeout(forceKillHandle);
   if (updateTimer) clearTimeout(updateTimer);
-  if (signal) signal.removeEventListener("abort", abortHandler);
   updateDirty = true;
   emitUpdate();
 
   const stdoutBuffer = stdoutCapture.toBuffer();
   const stderrBuffer = stderrCapture.toBuffer();
-  const aggregated = aggregateCodexOutput(stdoutBuffer, stderrBuffer, CODEX_CAPTURE_MAX_BYTES);
-  const aggregatedText = decodeUtf8Lossy(aggregated);
+  const { timedOut, aborted } = terminal;
   const provisional = {
     exitCode: terminal.exitCode,
     timedOut,
     aborted,
     durationMs: Date.now() - startedAt,
+    totalOutputBytes: stdoutCapture.totalBytes + stderrCapture.totalBytes,
+    totalOutputLines: stdoutCapture.newlineCount + stderrCapture.newlineCount +
+      ((stderrCapture.lastByte ?? stdoutCapture.lastByte) !== undefined &&
+       (stderrCapture.lastByte ?? stdoutCapture.lastByte) !== 10 ? 1 : 0),
   };
-  let modelBody = aggregatedText;
-  if (terminal.spawnError) {
-    modelBody = `${modelBody ? `${modelBody}\n\n` : ""}Failed to start process: ${terminal.spawnError}`;
-  } else if (aborted && !modelBody) {
-    modelBody = "Command aborted";
-  } else if (terminal.signal && !modelBody) {
-    modelBody = `Command terminated by signal ${terminal.signal}`;
-  }
-  const modelResult = formatExecOutputForModel(provisional, modelBody);
+  const modelResult = formatCapturedOutputForModel(provisional, stdoutBuffer, stderrBuffer);
+  const status = terminal.spawnError
+    ? `Failed to start process: ${terminal.spawnError}`
+    : aborted ? "Command aborted"
+    : terminal.signal ? `Command terminated by signal ${terminal.signal}` : "";
+  if (status) modelResult.text += `\n${status}`;
   const details = buildRenderDetails({
     command,
     cwd,
@@ -288,19 +218,22 @@ export async function executeCodexShellCommand(_toolCallId, params, signal, onUp
     stderrBuffer,
     stdoutTotalBytes: stdoutCapture.totalBytes,
     stderrTotalBytes: stderrCapture.totalBytes,
+    stdoutCapturedBytes: stdoutCapture.capturedBytes,
+    stderrCapturedBytes: stderrCapture.capturedBytes,
     modelResult,
   });
 
   return {
     content: [{ type: "text", text: modelResult.text }],
     details,
+    isError: !isProcessSuccess(details),
   };
 }
 
 export const __test = {
   assertDirectoryExists,
   executeCodexShellCommand,
-  killProcessTree,
+  waitForProcess,
   resolveWorkdir,
   shellInvocation,
 };

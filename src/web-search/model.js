@@ -52,6 +52,11 @@ function positiveInteger(value, fallback, label) {
 
 export function normalizeConfig(value) {
   const object = objectValue(value, "web search config");
+  const provider = optionalString(object, "provider");
+  const model = optionalString(object, "model");
+  if (Boolean(provider) !== Boolean(model)) {
+    throw new Error("web search config provider and model must be set together");
+  }
   const mode = object.mode ?? DEFAULT_WEB_SEARCH_CONFIG.mode;
   if (typeof mode !== "string" || !MODES.has(mode)) {
     throw new Error(
@@ -107,6 +112,7 @@ export function normalizeConfig(value) {
 
   return {
     mode,
+    ...(provider ? { provider, model } : {}),
     contextSize,
     allowedDomains: allowedDomains.map((domain) => domain.trim()),
     ...(location ? { location } : {}),

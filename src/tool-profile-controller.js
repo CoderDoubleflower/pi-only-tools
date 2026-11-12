@@ -19,11 +19,9 @@ export class ToolProfileController {
   constructor(pi, options = {}) {
     this.pi = pi;
     this.mode = "normal";
-    this.requiredTools = uniqueToolNames(options.requiredTools ?? []);
-    this.catalog = [];
-    this.catalogInitialized = false;
+    this.configurationBlocked = false;
     // Extension action methods are unavailable while extensions are being loaded.
-    // The complete session catalog is frozen from runtime state at session_start.
+    // Read the live registry only when a profile is applied or inspected.
     const initial = uniqueToolNames(options.initialTools ?? []);
     this.profiles = new Map([
       ["normal", initial],
@@ -34,6 +32,11 @@ export class ToolProfileController {
 
   assertProfile(profile) {
     if (!this.profiles.has(profile)) throw new Error(`Unknown tool profile: ${profile}`);
+  }
+
+  setConfigurationBlocked(blocked) {
+    this.configurationBlocked = blocked === true;
+    this.apply();
   }
 
   setProfile(profile, names, options = {}) {
@@ -61,11 +64,16 @@ export class ToolProfileController {
   }
 
   getRegisteredTools() {
-    return uniqueToolNames(
-      (this.pi.getAllTools?.() ?? [])
-        .map((tool) => tool?.name)
-        .filter((name) => typeof name === "string" && name.length > 0),
-    );
+    return [...this.getRegisteredToolDefinitions().keys()];
+  }
+
+  getRegisteredToolDefinitions() {
+    const definitions = new Map();
+    for (const tool of this.pi.getAllTools?.() ?? []) {
+      if (typeof tool?.name !== "string" || !tool.name.trim()) continue;
+      definitions.set(tool.name, tool);
+    }
+    return definitions;
   }
 
   getRegisteredToolNames() {
@@ -73,55 +81,57 @@ export class ToolProfileController {
   }
 
   getCatalogToolNames() {
-    return new Set(this.catalogInitialized ? this.catalog : this.getRegisteredTools());
+    return new Set(this.getCatalogTools());
   }
 
   getUnavailableTools(names) {
-    const registered = this.getRegisteredToolNames();
-    const catalog = this.getCatalogToolNames();
+    const registered = this.getRegisteredToolDefinitions();
     return uniqueToolNames(names).flatMap((name) => {
       if (!registered.has(name)) return [{ name, reason: "not registered" }];
-      if (this.catalogInitialized && !catalog.has(name)) {
-        return [{ name, reason: "not in the frozen session catalog; reload or start a new session" }];
+      if (registered.get(name).exposure === "hidden") {
+        return [{ name, reason: "hidden by its provider" }];
       }
       return [];
     });
   }
 
   getEffectiveTools(profile = this.mode) {
-    const registered = this.getRegisteredToolNames();
-    const catalog = this.getCatalogToolNames();
+    this.assertProfile(profile);
+    if (this.configurationBlocked) return [];
+    const registered = this.getRegisteredToolDefinitions();
     return this.getRequestedTools(profile).filter(
-      (name) => registered.has(name) && catalog.has(name),
+      (name) => registered.has(name) && registered.get(name).exposure !== "hidden",
     );
   }
 
   getDesiredCatalogTools() {
-    const desired = new Set(this.requiredTools);
-    for (const profile of this.profiles.keys()) {
-      for (const name of this.getRequestedTools(profile)) desired.add(name);
-    }
-    return this.getRegisteredTools().filter((name) => desired.has(name));
+    const allowed = new Set(this.getEffectiveTools());
+    const registered = this.getRegisteredToolDefinitions();
+    const active = uniqueToolNames(this.pi.getActiveTools?.() ?? []);
+    const activeSet = new Set(active);
+    // Authorization and model exposure are different sets. Deferred/codemode
+    // tools can be called through ctx.executeTool without being declared. Keep
+    // an authorized declaration that tool_search (or another loader) activated,
+    // but do not promote every registered tool into the model's loadout.
+    const visible = (name) => {
+      if (!allowed.has(name)) return false;
+      const exposure = registered.get(name)?.exposure ?? "direct";
+      return exposure === "direct" || exposure === "model-only" ||
+        ((exposure === "codemode" || exposure === "deferred") && activeSet.has(name));
+    };
+    // Pi also preserves retained order. Matching it avoids repeated setter calls
+    // when a late tool is appended or a profile's saved names are reordered.
+    return uniqueToolNames([...active, ...registered.keys()]).filter(visible);
   }
 
-  // The provider-visible catalog is one ordered snapshot of every tool
-  // registered at the session boundary. Mode/profile changes only alter the
-  // runtime allowlist; they never add, remove, or reorder tool definitions.
+  // Pi records model-visible tool changes as transcript deltas. Never freeze
+  // authorization to a startup snapshot: native MCP registers asynchronously.
   refreshCatalog() {
-    if (!this.catalogInitialized) {
-      this.catalog = this.getRegisteredTools();
-      this.catalogInitialized = true;
-    }
-    return [...this.catalog];
-  }
-
-  resetCatalog() {
-    this.catalog = [];
-    this.catalogInitialized = false;
+    return this.getDesiredCatalogTools();
   }
 
   getCatalogTools() {
-    return this.catalogInitialized ? [...this.catalog] : this.refreshCatalog();
+    return this.refreshCatalog();
   }
 
   isAllowed(toolName, profile = this.mode) {
@@ -138,6 +148,7 @@ export class ToolProfileController {
   snapshot() {
     return {
       mode: this.mode,
+      configurationBlocked: this.configurationBlocked,
       requested: {
         normal: this.getRequestedTools("normal"),
         ask: this.getRequestedTools("ask"),

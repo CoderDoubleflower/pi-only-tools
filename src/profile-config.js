@@ -60,14 +60,6 @@ function normalizeProfileObject(value, defaults, warnings, source) {
       );
       continue;
     }
-    if (!Array.isArray(raw)) {
-      warnings.push(`${source}: profiles.${profile} must be an array of tool names.`);
-      profiles[profile] = normalizeProfileTools(
-        profile,
-        defaultProfileTools(profile, defaults),
-      );
-      continue;
-    }
     const normalized = normalizeProfileTools(profile, raw);
     if (raw.includes(LEGACY_EXIT_PLAN_MODE_TOOL)) {
       warnings.push(
@@ -87,6 +79,39 @@ function normalizeProfileObject(value, defaults, warnings, source) {
     profiles[profile] = normalized;
   }
   return profiles;
+}
+
+function assertToolList(value, name) {
+  if (!Array.isArray(value) || value.some((tool) => typeof tool !== "string" || !tool.trim())) {
+    throw new Error(`${name} must be an array of non-empty tool names`);
+  }
+}
+
+function validateProfileConfig(parsed) {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("config root must be an object");
+  }
+  const version = parsed.version;
+  if (version === 1 || (version === undefined && Array.isArray(parsed.permanentlyDisabledTools))) {
+    assertToolList(parsed.permanentlyDisabledTools, "permanentlyDisabledTools");
+    return;
+  }
+  if (![2, 3, 4, 5, PROFILE_CONFIG_VERSION].includes(version)) {
+    throw new Error(`unsupported profile config version ${String(version)}; expected 1–${PROFILE_CONFIG_VERSION}`);
+  }
+  if (!parsed.profiles || typeof parsed.profiles !== "object" || Array.isArray(parsed.profiles)) {
+    throw new Error("profiles must be an object");
+  }
+  for (const profile of PROFILE_NAMES) {
+    const value = parsed.profiles[profile];
+    // Ask was added in schema 4. The existing profiles are always required;
+    // missing allowlists must not turn damaged files into broader defaults.
+    if (profile === "ask" && value === undefined && version < 4) continue;
+    assertToolList(value, `profiles.${profile}`);
+  }
+  if (parsed.profiles.execution !== undefined) {
+    assertToolList(parsed.profiles.execution, "profiles.execution");
+  }
 }
 
 function addToolsToProfiles(profiles, profileNames, toolNames) {
@@ -115,9 +140,7 @@ export async function loadProfileConfig(configPath, defaults = {}) {
   const warnings = [];
   try {
     const parsed = JSON.parse(await readFile(configPath, "utf8"));
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("config root must be an object");
-    }
+    validateProfileConfig(parsed);
 
     if (
       [2, 3, 4, 5, PROFILE_CONFIG_VERSION].includes(parsed.version) &&
@@ -238,13 +261,25 @@ export async function loadProfileConfig(configPath, defaults = {}) {
     if (error && typeof error === "object" && error.code === "ENOENT") {
       return { config: createProfileConfig(defaults), warnings, migrated: true };
     }
-    warnings.push(
-      `${configPath}: unable to read profile config: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-    return { config: createProfileConfig(defaults), warnings, migrated: true };
+    const message = `${configPath}: unable to read profile config: ${
+      error instanceof Error ? error.message : String(error)
+    }. The file was preserved; repair it or explicitly restore defaults in /only-tools.`;
+    warnings.push(message);
+    return {
+      config: createProfileConfig({ normal: [], ask: [], plan: [] }),
+      warnings,
+      migrated: false,
+      error: message,
+    };
   }
+}
+
+/** Preserve the original bytes before an explicit UI recovery replaces invalid configuration. */
+export async function backupProfileConfig(configPath) {
+  const content = await readFile(configPath);
+  const backupPath = `${configPath}.backup-${randomUUID()}`;
+  await writeFile(backupPath, content, { flag: "wx", mode: 0o600 });
+  return backupPath;
 }
 
 export async function saveProfileConfig(configPath, config) {

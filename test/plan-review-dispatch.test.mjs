@@ -1,189 +1,92 @@
 import assert from "node:assert/strict";
 import { createPlanToolUiExtensionApi } from "../src/plan-tool-ui.js";
-import { PLAN_HANDOFF_MESSAGE } from "../src/plan/constants.js";
+import { createPlanReviewController } from "../src/plan/review-controller.js";
+import { waitForModeCommandIdle } from "../src/plan/command-context.js";
 
 const handlers = new Map();
 const commands = new Map();
-const tools = new Map();
-const dispatchedCommands = [];
+const dispatched = [];
 const pendingDispatches = [];
-const reviewPrompts = [];
-const sameSessionMessages = [];
-const freshSessionMessages = [];
+const notifications = [];
 let waitForIdleCalls = 0;
-
+let hasPendingMessages = false;
 const eventCtx = {
   hasUI: true,
-  hasPendingMessages: () => false,
-  ui: {
-    async select(title, choices) {
-      reviewPrompts.push({ title, choices });
-      return "Keep reviewing for now";
-    },
-    notify() {},
-  },
+  hasPendingMessages: () => hasPendingMessages,
+  ui: { notify: (text) => notifications.push(text) },
 };
-
 const commandCtx = {
   ...eventCtx,
-  waitForIdle: async () => {
-    waitForIdleCalls += 1;
-  },
-  newSession: async (options) => {
-    if (typeof options?.withSession === "function") {
-      await options.withSession({
-        sendMessage(message, sendOptions) {
-          freshSessionMessages.push({ message, options: sendOptions });
-        },
-        ui: eventCtx.ui,
-      });
-    }
-    return { cancelled: false };
-  },
+  waitForIdle: async () => { waitForIdleCalls += 1; },
+  newSession: async () => ({ cancelled: false }),
 };
-
-const rawPi = {
+const pi = {
   on(event, handler) {
     const list = handlers.get(event) ?? [];
     list.push(handler);
     handlers.set(event, list);
   },
-  registerTool(tool) {
-    tools.set(tool.name, tool);
-  },
-  registerCommand(name, command) {
-    commands.set(name, command);
-  },
-  sendMessage(message, options) {
-    sameSessionMessages.push({ message, options });
-  },
   sendUserMessage(content, options) {
     assert.equal(options?.expandPromptTemplates, true);
-    assert.equal(typeof content, "string");
-    assert.match(content, /^\//);
-
-    const [invocation, ...rest] = content.slice(1).split(/\s+/);
-    const command = commands.get(invocation);
-    assert.ok(command, `Expected command ${invocation} to be registered`);
-    dispatchedCommands.push({ name: invocation, args: rest.join(" ") });
-    pendingDispatches.push(
-      Promise.resolve().then(() => command.handler(rest.join(" "), commandCtx)),
-    );
+    const [name, ...rest] = content.slice(1).split(/\s+/);
+    dispatched.push({ name, args: rest.join(" ") });
+    pendingDispatches.push(Promise.resolve().then(() => commands.get(name).handler(rest.join(" "), commandCtx)));
   },
 };
-
-const pi = createPlanToolUiExtensionApi(rawPi);
-
-pi.registerCommand("plan-approve", {
-  description: "Review the published plan",
+const review = createPlanReviewController(pi);
+commands.set("plan-approve", {
   handler: async (_args, ctx) => {
-    await ctx.waitForIdle();
-    assert.equal(typeof ctx.newSession, "function");
-    await ctx.ui.select("Plan r2", [
-      "Execute plan (keep context)",
-      "Clear context and execute in a new session",
-      "Edit plan",
-      "Give feedback and continue planning",
-      "Stay in Plan Mode",
-    ]);
+    review.clear();
+    await waitForModeCommandIdle(ctx);
+    assert.equal(typeof ctx.newSession, "function", "approval must receive Pi's command context");
   },
 });
-
-pi.registerTool({
-  name: "ExitPlanMode",
-  execute: async () => ({
-    content: [{ type: "text", text: "ready" }],
-    details: {
-      plan: { revision: 2 },
-      ready: { revision: 2, hash: "plan-hash" },
-    },
-  }),
-});
-
-pi.registerTool({
-  name: "plan_write",
-  execute: async () => ({
-    content: [{ type: "text", text: "saved" }],
-    details: { plan: { revision: 2 } },
-  }),
-});
-
-const validPlan = `# Dispatch Plan Review Through Pi
-
-## Context
-The automatic review currently starts from an agent lifecycle event, but the review command requires command-only session actions. Route the review through Pi's command dispatcher so the handler receives the correct runtime context.
-
-## Current State
-- \`src/plan-tool-ui.js\` schedules review from \`agent_settled\`.
-- \`/plan-approve\` waits for idle and may create a replacement session.
-
-## Implementation Steps
-1. **Dispatch the registered command**
-   - Files: \`src/plan-tool-ui.js\`
-   - Change: send \`/plan-approve\` with command expansion instead of invoking its handler with an event context.
-
-## Verification
-- Automated: run the Plan review dispatch regression test.
-- Integration: publish a valid plan and confirm the review menu opens without an extension error.
-`;
+async function emit(event, ctx = eventCtx) {
+  for (const handler of handlers.get(event) ?? []) await handler({ type: event }, ctx);
+  await Promise.all(pendingDispatches);
+}
 
 assert.equal("waitForIdle" in eventCtx, false);
-const result = await tools.get("plan_write").execute(
-  "plan-call",
-  { content: validPlan },
-  undefined,
-  undefined,
-  eventCtx,
-);
-assert.equal(result.terminate, true);
-
-for (const handler of handlers.get("agent_settled") ?? []) {
-  await handler({ type: "agent_settled" }, eventCtx);
-}
-await Promise.all(pendingDispatches);
-
-assert.deepEqual(dispatchedCommands, [{ name: "plan-approve", args: "" }]);
+review.request();
+await emit("agent_settled");
+assert.deepEqual(dispatched, [{ name: "plan-approve", args: "" }]);
 assert.equal(waitForIdleCalls, 1);
-assert.equal(reviewPrompts.length, 1);
-assert.ok(reviewPrompts[0].choices.includes("Keep reviewing for now"));
+await emit("agent_settled");
+assert.equal(dispatched.length, 1, "a publication must open review once");
 
-pi.sendMessage({
-  customType: PLAN_HANDOFF_MESSAGE,
-  content: "same-session approved plan",
-  display: true,
-  details: { clearContext: false },
+review.request();
+hasPendingMessages = true;
+await emit("agent_settled");
+assert.equal(dispatched.length, 1, "queued feedback must postpone review");
+hasPendingMessages = false;
+await emit("agent_settled");
+assert.equal(dispatched.length, 2);
+
+review.request();
+review.clear();
+await emit("agent_settled");
+assert.equal(dispatched.length, 2, "manual approval or leaving Plan must cancel pending automatic review");
+for (const event of ["session_start", "session_tree", "session_shutdown"]) {
+  review.request();
+  await emit(event);
+  await emit("agent_settled");
+  assert.equal(dispatched.length, 2, "pending review must not follow a different session branch");
+}
+review.request();
+await emit("agent_settled", { ...eventCtx, hasUI: false });
+assert.equal(dispatched.length, 2);
+assert.match(notifications.at(-1), /\/plan-approve keep/);
+
+// Rendering never owns a workflow callback or replaces tool execution.
+const rendered = [];
+const originalExecute = async () => ({ content: [], details: {} });
+const decorated = createPlanToolUiExtensionApi({
+  registerTool: (tool) => rendered.push(tool),
+  on: () => { throw new Error("rendering must not register workflow lifecycle handlers"); },
 });
-assert.equal(
-  sameSessionMessages.at(-1).message.display,
-  false,
-  "same-session handoffs must remain hidden to avoid repeating the rendered plan",
-);
+decorated.registerTool({ name: "plan_write", execute: originalExecute });
+assert.equal(rendered[0].execute, originalExecute);
+assert.equal(typeof rendered[0].renderResult, "function");
+assert.equal(createPlanToolUiExtensionApi(decorated), decorated);
 
-pi.registerCommand("test-fresh-plan-handoff", {
-  description: "Exercise the fresh-session handoff wrapper",
-  handler: async (_args, ctx) =>
-    ctx.newSession({
-      withSession: async (newContext) => {
-        await newContext.sendMessage(
-          {
-            customType: PLAN_HANDOFF_MESSAGE,
-            content: "fresh-session approved plan",
-            display: true,
-            details: { clearContext: true },
-          },
-          { triggerTurn: true },
-        );
-      },
-    }),
-});
-await commands.get("test-fresh-plan-handoff").handler("", commandCtx);
-assert.equal(freshSessionMessages.length, 1);
-assert.equal(
-  freshSessionMessages[0].message.display,
-  true,
-  "fresh-session handoffs must stay visible before execution starts",
-);
-assert.equal(freshSessionMessages[0].options.triggerTurn, true);
-assert.equal(freshSessionMessages[0].message.content, "fresh-session approved plan");
-
-console.log("Plan review command-context and handoff visibility regressions passed");
+console.log("Plan review dispatch, cancellation, and renderer separation tests passed");

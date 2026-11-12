@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { wrapPlanToolDefinition } from "../src/plan-tool-ui.js";
+import { PLAN_WRITE_DESCRIPTION, PLAN_WRITE_PROMPT_GUIDELINES } from "../src/plan/prompts.js";
 
 const theme = {
   fg(color, text) { return `<${color}>${text}</${color}>`; },
@@ -20,8 +21,8 @@ assert.match(enterCall, /inspect approval flow/);
 
 const planWrite = wrapPlanToolDefinition({
   name: "plan_write",
-  description: "legacy description",
-  promptGuidelines: ["Use the required sections: ## Context, ## Implementation Steps, and ## Verification."],
+  description: PLAN_WRITE_DESCRIPTION,
+  promptGuidelines: [...PLAN_WRITE_PROMPT_GUIDELINES],
 });
 assert.equal(planWrite.renderShell, "self");
 assert.match(planWrite.description, /user's language/i);

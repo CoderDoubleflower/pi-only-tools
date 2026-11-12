@@ -1,13 +1,15 @@
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { ASK_USER_QUESTION_TOOL, ENTER_PLAN_MODE_TOOL, EXIT_PLAN_MODE_TOOL, PLAN_CONTINUE_MESSAGE, PLAN_HANDOFF_MESSAGE, PLAN_STATE_ENTRY, PLAN_STATUS_KEY, PLAN_WIDGET_KEY, PLAN_WRITE_TOOL, STATE_SCHEMA_VERSION, } from "./constants.js";
+import { ASK_USER_QUESTION_TOOL, ENTER_PLAN_MODE_TOOL, LEGACY_EXIT_PLAN_MODE_TOOL, PLAN_CONTINUE_MESSAGE, PLAN_HANDOFF_MESSAGE, PLAN_STATE_ENTRY, PLAN_STATUS_KEY, PLAN_WIDGET_KEY, PLAN_WRITE_TOOL, STATE_SCHEMA_VERSION, } from "./constants.js";
 import { loadPlanModeConfig } from "./config.js";
 import { openPlanModeConfig } from "./config-ui.js";
 import { approvePlan, buildExecutionHandoffMessage, buildExecutionState, buildHandoffDetails, } from "./handoff.js";
 import { createPlanDocument, ensurePlanDocument, isManagedPlanDocument, isPlanReady, refreshPlanDocument, updatePlanDocument, } from "./plan-store.js";
 import { applyProfile, captureCurrentProfile, resolvePhaseProfile } from "./profile.js";
-import { buildExecutionSystemPrompt, buildPlanningSystemPrompt, buildReadySystemPrompt, } from "./prompts.js";
+import { buildExecutionSystemPrompt, buildPlanningSystemPrompt, buildReadySystemPrompt, PLAN_WRITE_DESCRIPTION, PLAN_WRITE_PROMPT_GUIDELINES, } from "./prompts.js";
+import { createPlanReviewController } from "./review-controller.js";
+import { waitForModeCommandIdle } from "./command-context.js";
 import { restorePlanModeState, touchState } from "./state.js";
 import { buildIdleTools, buildPlanningTools, getEffectivePlanningToolSelection, getMissingPlanningTools, isPlanningToolAllowed, } from "./tool-set.js";
 export * from "./config.js";
@@ -32,7 +34,6 @@ const planWriteSchema = Type.Object({
         description: "Optional optimistic-concurrency check against the current plan revision.",
     })),
 }, { additionalProperties: false });
-const emptySchema = Type.Object({}, { additionalProperties: false });
 function formatStateSummary(state) {
     return state?.stage === "planning" || state?.stage === "ready"
         ? "Plan Mode is active."
@@ -82,8 +83,9 @@ function countLatestAssistantToolCalls(ctx) {
     }
     return 0;
 }
-export function registerClaudePlanMode(pi, options = {}) {
+export function registerPlanRuntime(pi, options = {}) {
     const toolProfiles = options.toolProfiles;
+    const review = createPlanReviewController(pi);
     let state;
     let pendingPlanningContinuation = false;
     let removeShiftTabListener;
@@ -109,11 +111,12 @@ export function registerClaudePlanMode(pi, options = {}) {
             return toolNames;
         }
         const profile = profileForStage();
-        // Normal is the persistent source of truth. The internal executing state
-        // tracks an approved plan, but it must never overwrite the Normal allowlist.
+        // Do not persist a projection of the live registry as authorization:
+        // configured MCP tools can register after this mode is entered.
+        // Execution also keeps the user's Normal allowlist as its source of truth.
         return profile === "normal"
             ? toolProfiles.activate("normal")
-            : toolProfiles.activate("plan", toolNames);
+            : toolProfiles.activate("plan", [...selectedPlanningTools(), PLAN_WRITE_TOOL]);
     }
     function unavailablePlanningTools(toolNames) {
         if (toolProfiles)
@@ -133,6 +136,7 @@ export function registerClaudePlanMode(pi, options = {}) {
         ctx.ui.setStatus(PLAN_STATUS_KEY, planModeActive ? ctx.ui.theme.fg("warning", "Plan Mode") : undefined);
     }
     function commitState(next, ctx, persist = true) {
+        if (next.stage !== "ready") review.clear();
         state = touchState(next);
         if (persist)
             pi.appendEntry(PLAN_STATE_ENTRY, state);
@@ -294,7 +298,7 @@ export function registerClaudePlanMode(pi, options = {}) {
             pi.sendMessage({
                 customType: PLAN_HANDOFF_MESSAGE,
                 content: buildExecutionHandoffMessage(state),
-                display: true,
+                display: state.source.clearContext === true,
                 details: buildHandoffDetails(state, state.source.clearContext),
             }, { triggerTurn: false });
         }
@@ -373,6 +377,8 @@ export function registerClaudePlanMode(pi, options = {}) {
         };
     }
     async function leaveCurrentPlan(ctx) {
+        review.clear();
+        pendingPlanningContinuation = false;
         const current = state;
         if (!current?.baseline) {
             state = undefined;
@@ -451,7 +457,7 @@ export function registerClaudePlanMode(pi, options = {}) {
             ctx.ui.notify(`Plan updated to revision ${plan.revision} and remains ready for approval.`, "info");
         }
         else if (readiness.ready) {
-            ctx.ui.notify(`Plan updated to revision ${plan.revision}. Call ${EXIT_PLAN_MODE_TOOL} when ready.`, "info");
+            ctx.ui.notify(`Plan updated to revision ${plan.revision}. Publish the complete plan with ${PLAN_WRITE_TOOL} when ready.`, "info");
         }
         else {
             ctx.ui.notify(`Plan updated to revision ${plan.revision}, but it is not ready: ${readiness.reason}`, "warning");
@@ -474,7 +480,7 @@ export function registerClaudePlanMode(pi, options = {}) {
             lastFeedback: feedback.trim(),
         }, ctx);
         pi.sendUserMessage(`Revise the canonical plan at ${next.plan.path} using this user feedback:\n\n${feedback.trim()}\n\n` +
-            `Update the plan with ${PLAN_WRITE_TOOL}, then call ${EXIT_PLAN_MODE_TOOL} again when it is ready.`);
+            `Republish the complete plan with ${PLAN_WRITE_TOOL} when it is ready.`);
     }
     async function approveKeepContext(ctx, content) {
         if (!state?.plan || !state.baseline || !state.executionProfile)
@@ -494,7 +500,7 @@ export function registerClaudePlanMode(pi, options = {}) {
         pi.sendMessage({
             customType: PLAN_HANDOFF_MESSAGE,
             content: buildExecutionHandoffMessage(executionState),
-            display: true,
+            display: false,
             details: buildHandoffDetails(executionState, false),
         }, { triggerTurn: true });
     }
@@ -549,7 +555,7 @@ export function registerClaudePlanMode(pi, options = {}) {
     }
     async function loadReadyPlan(ctx) {
         if (state?.stage !== "ready" || !state.plan || !state.ready) {
-            ctx.ui.notify("No plan is ready. Complete planning and call ExitPlanMode first.", "warning");
+            ctx.ui.notify("No plan is ready. Complete and publish a valid plan first.", "warning");
             return undefined;
         }
         const content = await synchronizePlan(ctx, false);
@@ -562,7 +568,7 @@ export function registerClaudePlanMode(pi, options = {}) {
             if (current?.stage === "ready") {
                 commitState({ ...current, stage: "planning", ready: undefined, approved: undefined }, ctx);
             }
-            ctx.ui.notify("The plan changed after ExitPlanMode. Review it and call ExitPlanMode again.", "warning");
+            ctx.ui.notify("The plan changed after publication. Review it and republish the complete plan with plan_write.", "warning");
             return undefined;
         }
         const readiness = isPlanReady(content);
@@ -574,7 +580,8 @@ export function registerClaudePlanMode(pi, options = {}) {
         return { current, content };
     }
     async function runApprovalCommand(args, ctx) {
-        await ctx.waitForIdle();
+        review.clear();
+        await waitForModeCommandIdle(ctx);
         let requestedAction = args.trim().toLowerCase();
         while (true) {
             const loaded = await loadReadyPlan(ctx);
@@ -593,9 +600,9 @@ export function registerClaudePlanMode(pi, options = {}) {
                     "Clear context and execute in a new session",
                     "Edit plan",
                     "Give feedback and continue planning",
-                    "Stay in Plan Mode",
+                    "Keep reviewing for now",
                 ]);
-                if (!choice)
+                if (!choice || choice === "Keep reviewing for now")
                     return;
                 action = choice.startsWith("Execute")
                     ? "keep"
@@ -655,6 +662,7 @@ export function registerClaudePlanMode(pi, options = {}) {
         ],
         parameters: enterPlanSchema,
         executionMode: "sequential",
+        exposure: "model-only",
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             const result = await beginPlanning(ctx, { reason: params.reason, confirm: true });
             if (result.entered)
@@ -669,86 +677,57 @@ export function registerClaudePlanMode(pi, options = {}) {
     pi.registerTool({
         name: PLAN_WRITE_TOOL,
         label: "Write Plan",
-        description: "Replace the complete canonical Plan Mode Markdown document. The final plan must contain Context, ordered Implementation Steps, and Verification, and it must present only the recommended implementation.",
-        promptSnippet: "Write the complete, executable canonical implementation plan",
-        promptGuidelines: [
-            "Use plan_write only in Plan Mode and pass the complete plan, not a patch or fragment.",
-            "Use the required sections: ## Context, ## Implementation Steps, and ## Verification.",
-            "Name exact file paths and existing functions, types, or utilities to reuse in the ordered implementation steps.",
-            "Include only the recommended approach; remove alternatives, unresolved options, raw exploration notes, and all template placeholders.",
-            "Keep the plan concise enough to scan and detailed enough to implement without rediscovering the design.",
-        ],
+        description: PLAN_WRITE_DESCRIPTION,
+        promptSnippet: "Write and publish the complete canonical implementation plan for user review",
+        promptGuidelines: [...PLAN_WRITE_PROMPT_GUIDELINES],
         parameters: planWriteSchema,
         executionMode: "sequential",
+        exposure: "model-only",
         async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
             if (!state?.plan || (state.stage !== "planning" && state.stage !== "ready")) {
                 throw new Error("plan_write is only available during an active Plan session.");
             }
             const plan = await updatePlanDocument(state.plan, params.content, params.expected_revision);
-            const next = commitState({
+            commitState({
                 ...state,
                 stage: "planning",
                 plan,
                 ready: undefined,
                 approved: undefined,
             }, ctx);
-            return {
-                content: [
-                    {
-                        type: "text",
-                        text: `Canonical plan updated to revision ${plan.revision}.\nPath: ${plan.path}\nSHA-256: ${plan.hash}`,
-                    },
-                ],
-                details: { plan: next.plan },
-            };
+            return publishPlan(ctx);
         },
     });
-    pi.registerTool({
-        name: EXIT_PLAN_MODE_TOOL,
-        label: "Exit Plan Mode",
-        description: "Mark the complete, unambiguous canonical plan ready for user approval. This ends the planning agent run; the user then runs /plan-approve.",
-        promptSnippet: "Finish planning and ask the user to review the canonical plan",
-        promptGuidelines: [
-            "Call ExitPlanMode only after all material questions are resolved and the canonical plan satisfies the final plan content contract.",
-            "Call ExitPlanMode alone in its tool-call turn.",
-            "Do not begin implementation after calling it.",
-        ],
-        parameters: emptySchema,
-        executionMode: "sequential",
-        async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-            if (!state?.plan || (state.stage !== "planning" && state.stage !== "ready")) {
-                throw new Error("ExitPlanMode is only available during an active Plan session.");
-            }
-            const content = await synchronizePlan(ctx, false);
-            const current = state;
-            const readiness = isPlanReady(content);
-            if (!readiness.ready)
-                throw new Error(`Plan is not ready: ${readiness.reason}`);
-            const ready = {
-                revision: current.plan.revision,
-                hash: current.plan.hash,
-                preparedAt: new Date().toISOString(),
-            };
-            commitState({ ...current, stage: "ready", ready, approved: undefined }, ctx);
-            if (ctx.hasUI && !ctx.ui.getEditorText().trim())
-                ctx.ui.setEditorText("/plan-approve");
-            ctx.ui.notify("Plan is ready. Review it and run /plan-approve.", "info");
+
+    // Publication is part of plan_write, never a second model-callable tool.
+    async function publishPlan(ctx) {
+        const content = await synchronizePlan(ctx, false);
+        const current = state;
+        const readiness = isPlanReady(content);
+        if (!readiness.ready) {
             return {
-                content: [
-                    {
-                        type: "text",
-                        text: `Planning is complete. The user must run /plan-approve before implementation.\n\n` +
-                            `## Plan revision ${ready.revision}\n\n${content}`,
-                    },
-                ],
-                details: { plan: current.plan, ready },
-                terminate: true,
+                content: [{ type: "text", text: `Plan revision ${current.plan.revision} was saved but is not ready for review: ${readiness.reason}` }],
+                details: { plan: current.plan, readiness },
             };
-        },
-    });
+        }
+        const ready = {
+            revision: current.plan.revision,
+            hash: current.plan.hash,
+            preparedAt: new Date().toISOString(),
+        };
+        commitState({ ...current, stage: "ready", ready, approved: undefined }, ctx);
+        review.request();
+        return {
+            content: [{ type: "text", text: `Plan revision ${ready.revision} was saved and is awaiting user review. Do not begin implementation.` }],
+            details: { plan: current.plan, ready, readiness },
+            terminate: true,
+        };
+    }
+
     pi.registerCommand("plan", {
         description: "Start, inspect, edit, cancel, or finish Claude-style Plan Mode",
         handler: async (args, ctx) => {
+            await waitForModeCommandIdle(ctx);
             const raw = args.trim();
             if (!raw) {
                 if (!state || state.stage === "idle" || state.stage === "handed_off") {
@@ -904,7 +883,10 @@ export function registerClaudePlanMode(pi, options = {}) {
         ctx.ui.notify("User feedback reopened Plan Mode. Revise and republish the complete plan with plan_write.", "info");
     });
     pi.on("tool_call", (event, ctx) => {
-        if ((event.toolName === ENTER_PLAN_MODE_TOOL || event.toolName === EXIT_PLAN_MODE_TOOL) &&
+        if (event.toolName === LEGACY_EXIT_PLAN_MODE_TOOL) {
+            return { block: true, reason: "Plan approval is user-controlled. Publish the complete plan with plan_write and wait for user review." };
+        }
+        if (event.toolName === ENTER_PLAN_MODE_TOOL &&
             countLatestAssistantToolCalls(ctx) > 1) {
             return {
                 block: true,
@@ -977,5 +959,5 @@ export function registerClaudePlanMode(pi, options = {}) {
     };
 }
 export default function claudePlanModeExtension(pi) {
-    registerClaudePlanMode(pi);
+    registerPlanRuntime(pi);
 }

@@ -15,8 +15,8 @@ export function wrapShellCommandDefinition(tool) {
   return {
     ...tool,
     description:
-      `${tool.description} Output capture matches Codex: stdout and stderr are each capped at 1 MiB, ` +
-      "the combined capture is capped at 1 MiB, and model-visible output is middle-truncated to approximately 10,000 tokens.",
+      `${tool.description} Output capture retains the beginning and end of stdout and stderr within 1 MiB each, ` +
+      "and model-visible output preserves both streams within approximately 10,000 tokens.",
     execute: executeCodexShellCommand,
   };
 }

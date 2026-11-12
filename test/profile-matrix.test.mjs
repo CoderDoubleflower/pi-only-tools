@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PROFILE_CONFIG_VERSION, PROFILE_NAMES } from "../src/profile-config.js";
 import {
   runtimeToolsForProfile,
+  openProfileMatrix,
   __test,
 } from "../src/profile-matrix-ui.js";
 
@@ -250,4 +254,40 @@ assert.deepEqual(doneResults.at(-1), {
   col: 2,
 });
 
-console.log("profile matrix Normal/Ask/Plan rules tests passed");
+const recoveryDir = await mkdtemp(path.join(os.tmpdir(), "pi-only-tools-config-recovery-"));
+try {
+  const configPath = path.join(recoveryDir, "tools.json");
+  const original = '{"version":6,"profiles":';
+  await writeFile(configPath, original);
+  const options = {
+    configPath,
+    agentDir: recoveryDir,
+    configDirName: ".pi",
+    defaults: { normal: ["read"], ask: ["read"], plan: ["read"] },
+  };
+  const recoveryContext = {
+    cwd: recoveryDir,
+    mode: "tui",
+    hasUI: true,
+    ui: {
+      notify() {},
+      select: async () => undefined,
+      custom: async () => { throw new Error("invalid configuration must not open a writable matrix implicitly"); },
+    },
+  };
+  const kept = await openProfileMatrix({ getAllTools: () => [] }, recoveryContext, options);
+  assert.equal(kept.saved, false);
+  assert.equal(await readFile(configPath, "utf8"), original);
+  recoveryContext.ui.select = async (_title, choices) => choices[1];
+  recoveryContext.ui.custom = async () => ({ dirty: false });
+  const recovered = await openProfileMatrix({ getAllTools: () => [] }, recoveryContext, options);
+  assert.equal(recovered.saved, true, "only the explicit recovery choice may replace the file");
+  const backups = (await readdir(recoveryDir)).filter((name) => name.startsWith("tools.json.backup-"));
+  assert.equal(backups.length, 1);
+  assert.equal(await readFile(path.join(recoveryDir, backups[0]), "utf8"), original);
+  assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")).profiles.normal, ["read"]);
+} finally {
+  await rm(recoveryDir, { recursive: true, force: true });
+}
+
+console.log("profile matrix rules and explicit configuration recovery tests passed");
