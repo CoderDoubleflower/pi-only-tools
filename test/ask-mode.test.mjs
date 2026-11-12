@@ -71,6 +71,9 @@ const registered = new Set([
 let activeTools = ["shell_command", "apply_patch"];
 let setActiveToolsCalls = 0;
 let planStage = "idle";
+let idle = true;
+let releaseIdle;
+let waitForIdleCalls = 0;
 
 const pi = {
   on(event, handler) {
@@ -100,6 +103,7 @@ profiles.setProfile(
     "read",
     "web_fetch",
     "mcp__github__get_file_contents",
+    "mcp__late__read",
     "shell_command",
     "apply_patch",
   ],
@@ -111,24 +115,20 @@ profiles.setProfile(
   { apply: false },
 );
 profiles.activate("normal");
-const stableCatalog = [
-  "shell_command",
-  "apply_patch",
-  "read",
-  "grep",
-  "web_fetch",
-  "mcp__github__get_file_contents",
-  "ask_user_question",
-  "plan_write",
-];
-assert.deepEqual(activeTools, stableCatalog);
-assert.equal(setActiveToolsCalls, 1);
+function assertActive(expected, message) {
+  assert.deepEqual([...activeTools].sort(), [...expected].sort(), message);
+}
+assertActive(["shell_command", "apply_patch"]);
+assert.equal(setActiveToolsCalls, 0, "an unchanged loadout should not be reset");
 
 const ctx = {
   mode: "tui",
   hasUI: true,
-  isIdle: () => true,
-  waitForIdle: async () => undefined,
+  isIdle: () => idle,
+  waitForIdle: async () => {
+    waitForIdleCalls += 1;
+    if (!idle) await new Promise((resolve) => { releaseIdle = resolve; });
+  },
   sessionManager: {
     getEntries: () => entries,
     getBranch: () => entries,
@@ -197,13 +197,21 @@ assert.equal(modePrompts.length, 1);
 assert.deepEqual(modePrompts[0].choices, ["Normal", "Ask", "Plan"]);
 assert.equal(modes.getMode(), "ask");
 assert.equal(profiles.snapshot().mode, "ask");
-assert.deepEqual(activeTools, stableCatalog, "Ask mode must keep the provider-visible catalog stable");
-assert.equal(setActiveToolsCalls, 1);
+assertActive(["read", "web_fetch", "mcp__github__get_file_contents"]);
 assert.deepEqual(profiles.getEffectiveTools("ask"), [
   "read",
   "web_fetch",
   "mcp__github__get_file_contents",
 ]);
+assert.ok(profiles.getRequestedTools("ask").includes("mcp__late__read"));
+registered.add("mcp__late__read");
+profiles.apply();
+assertActive(["read", "web_fetch", "mcp__github__get_file_contents", "mcp__late__read"]);
+assert.equal(await emit("tool_call", { toolName: "mcp__late__read" }), undefined,
+  "an explicitly authorized MCP tool remains allowed when it registers later");
+const callsBeforeReapply = setActiveToolsCalls;
+await modes.applySavedConfiguration(ctx);
+assert.equal(setActiveToolsCalls, callsBeforeReapply, "reapplying Ask must preserve the current loadout");
 
 const prompt = await emit("before_agent_start", { systemPrompt: "base" });
 assert.equal(prompt, undefined, "Ask mode must not append a mode-specific dynamic system prompt");
@@ -217,15 +225,14 @@ await commands.get("mode").handler("", ctx);
 assert.equal(modes.getMode(), "plan");
 assert.equal(planStage, "planning");
 assert.equal(profiles.snapshot().mode, "plan");
-assert.deepEqual(activeTools, stableCatalog);
-assert.equal(setActiveToolsCalls, 1);
+assertActive(["read", "grep", "ask_user_question", "plan_write"]);
 
 modeChoices.push("Normal");
 await commands.get("mode").handler("", ctx);
 assert.equal(modes.getMode(), "normal");
 assert.equal(planStage, "idle");
 assert.equal(profiles.snapshot().mode, "normal");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(["shell_command", "apply_patch"]);
 
 assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
 await waitFor(() => modes.getMode() === "ask");
@@ -237,7 +244,7 @@ await waitFor(() => modes.getMode() === "normal");
 await modes.setMode("ask", ctx, { notify: false });
 profiles.setProfile("ask", ["grep", "ask_user_question"], { apply: false });
 await modes.applySavedConfiguration(ctx);
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(["grep", "ask_user_question"]);
 assert.deepEqual(profiles.getEffectiveTools("ask"), ["grep", "ask_user_question"]);
 
 planStage = "executing";
@@ -246,8 +253,25 @@ await waitFor(() => notifications.some((entry) => entry.message.includes("switch
 assert.equal(modes.getMode(), "normal");
 assert.equal(planStage, "executing");
 assert.equal(profiles.snapshot().mode, "normal");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(["shell_command", "apply_patch"]);
+
+idle = false;
+const promptsBeforeBusyCommand = modePrompts.length;
+modeChoices.push("Ask");
+const busyModeCommand = commands.get("mode").handler("", ctx);
+await waitFor(() => typeof releaseIdle === "function");
+assert.equal(modes.getMode(), "normal", "/mode must not change mode while an agent turn is running");
+assert.equal(modePrompts.length, promptsBeforeBusyCommand, "the selector opens after idle");
+assert.deepEqual(terminalInput("\u001b[Z"), { consume: true });
+await Promise.resolve();
+assert.equal(modes.getMode(), "normal", "Shift+Tab must reject a mode change while busy");
+assert.ok(notifications.some((entry) => entry.message.includes("after the current agent turn finishes")));
+idle = true;
+releaseIdle();
+await busyModeCommand;
+assert.equal(waitForIdleCalls, 1);
+assert.equal(modes.getMode(), "ask");
 
 await emit("session_shutdown", { reason: "quit" });
 assert.equal(terminalHandlers.size, 0);
-console.log("Ask Mode cache-stable selector, policy, and cycle tests passed");
+console.log("Ask Mode dynamic permissions, selector, command timing, and cycle tests passed");

@@ -162,4 +162,15 @@ test("rejects invalid configuration", () => {
     () => normalizeConfig({ allowedDomains: "openai.com" }),
     /allowedDomains/,
   );
+  assert.throws(() => normalizeConfig({ provider: "search" }), /must be set together/);
+  assert.throws(() => normalizeConfig({ model: "search-model" }), /must be set together/);
+  assert.throws(() => normalizeConfig({ provider: " ", model: "search-model" }), /non-empty/);
+});
+
+test("normalizes an independent search provider without changing the default", () => {
+  assert.equal(normalizeConfig({}).provider, undefined);
+  assert.deepEqual(
+    { ...normalizeConfig({}), provider: "search", model: "search-model" },
+    normalizeConfig({ provider: " search ", model: " search-model " }),
+  );
 });

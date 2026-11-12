@@ -1,9 +1,10 @@
 import { registerAskMode } from "../ask-mode.js";
 import { registerCacheStableModeRuntime } from "../cache-stable-mode.js";
 import { createPlanToolUiExtensionApi } from "../plan-tool-ui.js";
+import { waitForModeCommandIdle } from "./command-context.js";
 import {
-  registerClaudePlanMode as registerLegacyClaudePlanMode,
-} from "./legacy-index.js";
+  registerPlanRuntime,
+} from "./runtime.js";
 
 export * from "./config.js";
 export * from "./config-ui.js";
@@ -46,7 +47,8 @@ function createPlanRuntimeBridge(pi) {
           if (name !== "plan") return registerCommand(name, command);
           const bridged = {
             ...command,
-            handler: (args, ctx) => {
+            handler: async (args, ctx) => {
+              await waitForModeCommandIdle(ctx);
               const next = () => command.handler(args, ctx);
               return commandInterceptor
                 ? commandInterceptor(args, ctx, next)
@@ -85,21 +87,21 @@ function createPlanRuntimeBridge(pi) {
 export function registerClaudePlanMode(pi, options = {}) {
   const decoratedPi = createPlanToolUiExtensionApi(pi);
   if (!options.toolProfiles) {
-    return registerLegacyClaudePlanMode(decoratedPi, options);
+    return registerPlanRuntime(decoratedPi, options);
   }
 
   const bridge = createPlanRuntimeBridge(decoratedPi);
-  const legacyMode = registerLegacyClaudePlanMode(bridge.api, options);
+  const runtime = registerPlanRuntime(bridge.api, options);
   const planActions = {
-    getStage: legacyMode.getStage,
+    getStage: runtime.getStage,
     async enter(ctx, reason) {
       const command = bridge.getPlanCommand();
       if (!command) throw new Error("The Plan command is unavailable.");
       await command.handler(reason ? `on ${reason}` : "on", ctx);
-      return ["planning", "ready"].includes(legacyMode.getStage());
+      return ["planning", "ready"].includes(runtime.getStage());
     },
     async leave(ctx) {
-      if (!["planning", "ready"].includes(legacyMode.getStage())) return;
+      if (!["planning", "ready"].includes(runtime.getStage())) return;
       const command = bridge.getPlanCommand();
       if (!command) throw new Error("The Plan command is unavailable.");
       await command.handler("off", ctx);
@@ -109,18 +111,18 @@ export function registerClaudePlanMode(pi, options = {}) {
   const askMode = registerAskMode(decoratedPi, {
     toolProfiles: options.toolProfiles,
     planMode: planActions,
-    openConfig: legacyMode.openConfig,
+    openConfig: runtime.openConfig,
   });
   bridge.setCommandInterceptor(askMode.prepareForPlanCommand);
 
   const integratedMode = {
-    ...legacyMode,
+    ...runtime,
     async applySavedConfiguration(ctx) {
-      await legacyMode.applySavedConfiguration?.(ctx);
+      await runtime.applySavedConfiguration?.(ctx);
       await askMode.applySavedConfiguration(ctx);
     },
     async openConfig(ctx) {
-      const result = await legacyMode.openConfig(ctx);
+      const result = await runtime.openConfig(ctx);
       if (result?.saved) await askMode.applySavedConfiguration(ctx);
       return result;
     },

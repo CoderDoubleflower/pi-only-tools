@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import {
   MODE_STATE_CUSTOM_TYPE,
   MODE_STATE_SCHEMA_VERSION,
+  MODE_SYSTEM_PROMPT_SECTION,
+  STABLE_MODE_SYSTEM_PROMPT,
   appendRuntimeStateMessage,
   appendStableModeSystemPrompt,
   buildRuntimeStateMessage,
@@ -22,12 +24,8 @@ function createProfiles() {
   return {
     mode: "normal",
     applyCalls: 0,
-    resetCalls: 0,
     apply() {
       this.applyCalls += 1;
-    },
-    resetCatalog() {
-      this.resetCalls += 1;
     },
     getEffectiveTools(profile = this.mode) {
       return [...(profiles[profile] ?? [])];
@@ -68,7 +66,7 @@ const readyState = {
 assert.deepEqual(createRuntimePolicySnapshot(profiles, readyState).allowedTools, []);
 
 const prompt = appendStableModeSystemPrompt("base prompt");
-assert.match(prompt, /stable tool catalog/u);
+assert.match(prompt, /manages tool declarations/u);
 assert.match(prompt, /append-only/u);
 assert.equal(appendStableModeSystemPrompt(prompt), prompt);
 
@@ -195,6 +193,86 @@ assert.equal(
   "unknown hosted-tool shapes must be left untouched",
 );
 
+const stricterCaller = {
+  ...payload,
+  tools: [...payload.tools, { type: "function", name: "write" }],
+  tool_choice: {
+    type: "allowed_tools",
+    mode: "required",
+    tools: [{ type: "function", name: "read" }],
+  },
+};
+assert.equal(
+  rewriteOpenAIResponsesToolChoice(stricterCaller, ["read", "edit"], model, {}),
+  stricterCaller,
+  "a stricter caller allowlist must never be broadened",
+);
+assert.equal(
+  rewriteOpenAIResponsesToolChoice(stricterCaller, ["edit"], model, {}).tool_choice,
+  "none",
+  "disjoint allowlists must prohibit tools instead of substituting another function",
+);
+const intersected = rewriteOpenAIResponsesToolChoice({
+  ...stricterCaller,
+  tool_choice: {
+    type: "allowed_tools",
+    mode: "required",
+    tools: [{ type: "function", name: "read" }, { type: "function", name: "edit" }],
+  },
+}, ["read", "write"], model, {});
+assert.deepEqual(intersected.tool_choice, {
+  type: "allowed_tools", mode: "required", tools: [{ type: "function", name: "read" }],
+});
+for (const choice of ["none", { type: "function", name: "read" }]) {
+  const forced = { ...payload, tool_choice: choice };
+  assert.equal(rewriteOpenAIResponsesToolChoice(forced, ["read"], model, {}), forced);
+}
+assert.equal(
+  rewriteOpenAIResponsesToolChoice({ ...payload, tool_choice: { type: "function", name: "edit" } }, ["read"], model, {}).tool_choice,
+  "none",
+);
+
+// Pi 1.5 serializes compatible Responses tools in cumulative input items.
+// Older declarations remain in the prefix after a removal or redefinition.
+const incrementalPayload = {
+  model: model.id,
+  input: [
+    { type: "additional_tools", role: "developer", tools: [
+      { type: "function", name: "read", description: "old read" },
+      { type: "function", name: "edit" },
+    ] },
+    { role: "user", content: "inspect only" },
+    { role: "developer", content: "edit is no longer available" },
+    { type: "additional_tools", role: "developer", tools: [
+      { type: "function", name: "read", description: "updated read" },
+      { type: "function", name: "lookup" },
+    ] },
+  ],
+};
+const beforeRewrite = JSON.stringify(incrementalPayload);
+const incrementalRestricted = rewriteOpenAIResponsesToolChoice(incrementalPayload, ["read", "lookup", "not_declared"], model, {});
+assert.equal(incrementalRestricted.input, incrementalPayload.input, "preserve the entire cached input prefix");
+assert.equal(incrementalRestricted.tools, undefined, "do not relocate inline tools to the request header");
+assert.equal(JSON.stringify(incrementalPayload), beforeRewrite, "never mutate historical tool declarations");
+assert.deepEqual(incrementalRestricted.tool_choice, {
+  type: "allowed_tools", mode: "auto",
+  tools: [{ type: "function", name: "read" }, { type: "function", name: "lookup" }],
+});
+assert.equal(rewriteOpenAIResponsesToolChoice(incrementalPayload, [], model, {}).tool_choice, "none");
+
+const mixedDeclarationPayload = {
+  ...incrementalPayload,
+  tools: [{ type: "web_search_preview" }],
+};
+assert.equal(rewriteOpenAIResponsesToolChoice(mixedDeclarationPayload, [], model, {}), mixedDeclarationPayload);
+const syntheticSearchPayload = {
+  tools: [{ type: "function", name: "read" }],
+  input: [{ type: "tool_search_output", tools: [{ type: "function", name: "lookup" }] }],
+};
+assert.deepEqual(rewriteOpenAIResponsesToolChoice(syntheticSearchPayload, ["lookup"], model, {}).tool_choice.tools,
+  [{ type: "function", name: "lookup" }]);
+assert.equal(rewriteOpenAIResponsesToolChoice({ input: "plain text" }, [], model, {}).input, "plain text");
+
 const handlers = new Map();
 const sentMessages = [];
 const runtimeProfiles = createProfiles();
@@ -224,12 +302,11 @@ sessionStart(
   { reason: "startup" },
   { sessionManager: { getBranch: () => [] } },
 );
-assert.equal(runtimeProfiles.resetCalls, 1);
 assert.equal(runtimeProfiles.applyCalls, 1);
 
 const beforeAgentStart = handlers.get("before_agent_start")[0];
 const firstStart = beforeAgentStart({ systemPrompt: "base" }, {});
-assert.match(firstStart.systemPrompt, /stable tool catalog/u);
+assert.match(firstStart.systemPrompt, /manages tool declarations/u);
 assert.equal(firstStart.message.customType, MODE_STATE_CUSTOM_TYPE);
 assert.equal(firstStart.message.role, undefined);
 assert.equal(firstStart.message.timestamp, undefined);
@@ -246,6 +323,19 @@ assert.equal(
 const secondStart = beforeAgentStart({ systemPrompt: "base" }, {});
 assert.equal(secondStart.message, undefined, "ordinary agent runs must not duplicate a contract");
 
+const structuredEvent = {
+  systemPrompt: "base",
+  systemPromptOptions: { sections: { existing: "other extension" }, selectedTools: ["unapproved_tool"] },
+};
+pi.getActiveTools = () => ["read", "edit"];
+const structuredResult = beforeAgentStart(structuredEvent, {});
+assert.equal(structuredResult.systemPrompt, undefined, "native prompt deltas must not be replaced by a forced prompt");
+assert.equal(structuredEvent.systemPromptOptions.sections[MODE_SYSTEM_PROMPT_SECTION], STABLE_MODE_SYSTEM_PROMPT);
+assert.equal(structuredEvent.systemPromptOptions.sections.existing, "other extension");
+assert.deepEqual(structuredEvent.systemPromptOptions.selectedTools, ["read", "edit"],
+  "structured tool edits must agree with the applied profile loadout");
+assert.equal(structuredResult.message, undefined);
+
 runtimeState.mode = "ask";
 const recovered = context({
   messages: [{ role: "user", content: "task" }, firstPersistentMessage],
@@ -255,7 +345,9 @@ assert.equal(recovered.messages[1], firstPersistentMessage);
 assert.match(recovered.messages[2].content, /"mode": "ask"/u);
 
 const turnEnd = handlers.get("turn_end")[0];
+const appliedBeforeTurnEnd = runtimeProfiles.applyCalls;
 turnEnd({});
+assert.equal(runtimeProfiles.applyCalls, appliedBeforeTurnEnd + 1, "reconcile late registrations before Pi snapshots the next turn");
 assert.equal(sentMessages.length, 1);
 assert.equal(sentMessages[0].message.customType, MODE_STATE_CUSTOM_TYPE);
 assert.match(sentMessages[0].message.content, /"mode": "ask"/u);
@@ -278,5 +370,11 @@ assert.deepEqual(providerResult.tool_choice.tools, [
   { type: "function", name: "read" },
 ]);
 assert.equal(providerResult.tools, payload.tools);
+
+runtimeProfiles.getCatalogTools = () => ["read"];
+runtimeState.mode = "normal";
+const catalogRestricted = beforeProviderRequest({ payload: incrementalPayload }, { model });
+assert.deepEqual(catalogRestricted.tool_choice.tools, [{ type: "function", name: "read" }],
+  "historical additional_tools declarations must be restricted to the current visible policy");
 
 console.log("cache-stable mode tests passed");

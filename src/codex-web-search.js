@@ -295,11 +295,19 @@ export function createCodexWebSearchTool(config = loadWebSearchConfig()) {
       "After browsing, cite claims with direct Markdown links near the supported text; never expose internal search reference IDs in the final response.",
     ],
     parameters: webSearchParameters,
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     executionMode: "parallel",
     renderShell: "self",
 
     async execute(_toolCallId, rawCommands, signal, _onUpdate, ctx) {
-      const model = ctx.model;
+      const model = config.provider
+        ? ctx.modelRegistry?.find?.(config.provider, config.model)
+        : ctx.model;
+      if (config.provider && !model) {
+        throw new Error(
+          `Web search model ${config.provider}/${config.model} is not registered in Pi. Check provider and model in web-search.json.`,
+        );
+      }
       if (!model) throw new Error("web search requires an active model");
       if (!ctx.modelRegistry?.getApiKeyAndHeaders) {
         throw new Error("web search requires Pi model authentication");
@@ -350,6 +358,12 @@ export function createCodexWebSearchTool(config = loadWebSearchConfig()) {
           signal: requestSignal,
         },
       );
+      if ([404, 405, 501].includes(response.status)) {
+        await response.body?.cancel();
+        throw new Error(
+          `Web search endpoint POST /alpha/search is unavailable for provider ${model.provider} (HTTP ${response.status}). Configure a compatible provider and model in web-search.json.`,
+        );
+      }
       const text = await response.text();
       let body;
       try {

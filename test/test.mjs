@@ -70,16 +70,12 @@ assert.equal(setActiveToolsCalls, 0, "loading the plugin must not force an activ
 assert.deepEqual(__test.ONLY_TOOLS, ["shell_command", "apply_patch"]);
 assert.ok(commands.has("only-tools"));
 assert.ok(commands.has("pi-only-tools"));
-assert.deepEqual([...handlers.keys()], [
-  "tool_result",
-  "session_start",
-  "session_tree",
-  "input",
-  "before_agent_start",
-  "context",
-  "tool_call",
+for (const event of [
+  "tool_result", "session_start", "session_tree", "input", "before_agent_start",
+  "context", "turn_end", "agent_end", "agent_settled", "tool_call",
   "before_provider_request",
-]);
+]) assert.ok(handlers.has(event), `Missing runtime handler: ${event}`);
+
 assert.deepEqual(__test.getBuiltinTools(pi).map((tool) => tool.name), ["bash", "edit", "read", "write"]);
 assert.equal(__test.getGlobalSettingsPath(), path.join(agentDir, "settings.json"));
 assert.deepEqual(__test.normalizeToolNameList([" read ", "bash", "read", "", null]), ["read", "bash"]);
@@ -200,6 +196,7 @@ const shellResult = await shell.execute(
   ctx,
 );
 assert.equal(shellResult.details.exitCode, 0);
+assert.equal(shellResult.isError, false);
 assert.match(shellResult.content[0].text, /one/);
 assert.ok(shellUpdates.length >= 1);
 const shellSuccessHookResult = await handlers.get("tool_result")[0]({
@@ -254,6 +251,7 @@ const failedShellResult = await shell.execute(
   ctx,
 );
 assert.equal(failedShellResult.details.exitCode, 7);
+assert.equal(failedShellResult.isError, true);
 assert.match(failedShellResult.content[0].text, /failed-output/);
 assert.match(failedShellResult.content[0].text, /Command exited with code 7/);
 assert.deepEqual(
@@ -279,13 +277,13 @@ for (const details of [
     { isError: true },
   );
 }
-assert.equal(
+assert.deepEqual(
   await handlers.get("tool_result")[0]({
     toolName: "apply_patch",
     details: { exitCode: 7 },
     isError: false,
   }),
-  undefined,
+  { isError: true },
 );
 
 const patchScript = path.join(temp, "mock-apply-patch.mjs");
@@ -306,6 +304,7 @@ const patchResult = await patchTool.execute(
   ctx,
 );
 assert.equal(patchResult.details.exitCode, 0);
+assert.equal(patchResult.isError, false);
 assert.equal(await readFile(path.join(temp, "foo.txt"), "utf8"), "new\n");
 assert.equal(patchResult.details.patchSummary.additions, 1);
 assert.equal(patchResult.details.patchSummary.removals, 1);

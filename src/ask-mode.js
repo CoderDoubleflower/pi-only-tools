@@ -1,10 +1,11 @@
 import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { waitForModeCommandIdle } from "./plan/command-context.js";
 import {
   ASK_MODE_PROFILE,
   ASK_MODE_STATE_ENTRY,
   ASK_MODE_STATE_VERSION,
   ASK_MODE_STATUS_KEY,
-  buildAskTools,
+  normalizeAskTools,
 } from "./ask-mode-policy.js";
 
 const PLAN_ACTIVE_STAGES = new Set(["planning", "ready"]);
@@ -84,10 +85,6 @@ export function registerAskMode(pi, options) {
   let state;
   let removeShiftTabListener;
 
-  function allToolNames() {
-    return new Set((pi.getAllTools?.() ?? []).map((tool) => tool?.name).filter(Boolean));
-  }
-
   function isPlanActive() {
     return PLAN_ACTIVE_STAGES.has(planMode.getStage?.());
   }
@@ -99,13 +96,6 @@ export function registerAskMode(pi, options) {
   function getMode() {
     if (isPlanActive()) return "plan";
     return isActive() ? "ask" : "normal";
-  }
-
-  function selectedAskTools() {
-    return buildAskTools(
-      toolProfiles.getRequestedTools(ASK_MODE_PROFILE),
-      allToolNames(),
-    );
   }
 
   function updateUi(ctx) {
@@ -123,9 +113,11 @@ export function registerAskMode(pi, options) {
   }
 
   function activateAskTools(ctx, { warnIfEmpty = false } = {}) {
-    const tools = selectedAskTools();
-    toolProfiles.setProfile(ASK_MODE_PROFILE, tools, { apply: false });
-    toolProfiles.activate(ASK_MODE_PROFILE);
+    // Keep explicit permissions for tools that register later, such as native MCP.
+    // The profile controller resolves availability against Pi's live registry.
+    const requested = normalizeAskTools(toolProfiles.getRequestedTools(ASK_MODE_PROFILE));
+    toolProfiles.setProfile(ASK_MODE_PROFILE, requested, { apply: false });
+    const tools = toolProfiles.activate(ASK_MODE_PROFILE);
     updateUi(ctx);
     if (warnIfEmpty && tools.length === 0) {
       ctx.ui.notify(
@@ -237,7 +229,7 @@ export function registerAskMode(pi, options) {
   }
 
   async function openModeMenu(ctx) {
-    await ctx.waitForIdle?.();
+    await waitForModeCommandIdle(ctx);
     if (!ctx.hasUI || typeof ctx.ui.select !== "function") {
       ctx.ui.notify("The /mode selector requires interactive UI.", "warning");
       return { mode: getMode(), changed: false };

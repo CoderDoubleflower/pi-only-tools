@@ -12,6 +12,8 @@ import {
 } from "./plan/constants.js";
 import { THINKING_LEVELS } from "./plan/types.js";
 import {
+  backupProfileConfig,
+  createProfileConfig,
   loadProfileConfig,
   PROFILE_NAMES,
   saveProfileConfig,
@@ -51,6 +53,10 @@ function copy() {
         help: "↑↓ 行  ←→ Profile  Enter/Space 切换  M 模型  E/T Effort  A/N/R  Esc 保存",
         saved: "Profile 工具矩阵已保存",
         requiresTui: "Profile 工具矩阵仅在 Pi TUI 模式中可用。",
+        invalidConfig: "工具配置无法读取",
+        keepInvalidConfig: "保留文件并关闭",
+        restoreInvalidConfig: "备份原文件并恢复默认配置",
+        configBackup: "原配置已备份",
       }
     : {
         title: "Only Tools",
@@ -67,6 +73,10 @@ function copy() {
         help: "↑↓ row  ←→ profile  Enter/Space toggle  M model  E/T effort  A/N/R  Esc save",
         saved: "Tool profile matrix saved",
         requiresTui: "The tool profile matrix is available only in Pi TUI mode.",
+        invalidConfig: "The tool configuration could not be loaded",
+        keepInvalidConfig: "Keep the file and close",
+        restoreInvalidConfig: "Back up the file and restore defaults",
+        configBackup: "Original configuration backed up",
       };
 }
 
@@ -549,8 +559,23 @@ export async function openProfileMatrix(pi, ctx, options) {
       ),
     ]),
   );
-  const loaded = await loadProfileConfig(options.configPath, defaults);
+  let loaded = await loadProfileConfig(options.configPath, defaults);
   for (const warning of loaded.warnings) ctx.ui.notify(warning, "warning");
+  if (loaded.error) {
+    const choice = await ctx.ui.select(text.invalidConfig, [
+      text.keepInvalidConfig,
+      text.restoreInvalidConfig,
+    ]);
+    if (choice !== text.restoreInvalidConfig) return { saved: false, error: loaded.error };
+    try {
+      const backupPath = await backupProfileConfig(options.configPath);
+      ctx.ui.notify(`${text.configBackup}: ${backupPath}`, "info");
+    } catch (error) {
+      ctx.ui.notify(`Unable to back up ${options.configPath}: ${error instanceof Error ? error.message : String(error)}`, "error");
+      return { saved: false, error: loaded.error };
+    }
+    loaded = { config: createProfileConfig(defaults), migrated: true, warnings: [] };
+  }
   const config = {
     version: loaded.config.version,
     profiles: Object.fromEntries(

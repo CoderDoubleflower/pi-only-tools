@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  backupProfileConfig,
   loadProfileConfig,
   PROFILE_CONFIG_VERSION,
   PROFILE_NAMES,
@@ -33,6 +34,37 @@ const defaults = {
 
 assert.equal(PROFILE_CONFIG_VERSION, 6);
 assert.deepEqual(PROFILE_NAMES, ["normal", "ask", "plan"]);
+
+const missing = await loadProfileConfig(file, defaults);
+assert.equal(missing.migrated, true);
+assert.equal(missing.error, undefined);
+
+for (const invalid of [
+  '{"version":6,"profiles":{"normal":[]},',
+  JSON.stringify({ version: 7, profiles: { normal: [], ask: [], plan: [] } }),
+  JSON.stringify({ version: 6, profiles: { normal: "read", ask: [], plan: [] } }),
+  JSON.stringify({ version: 6, profiles: { normal: [42], ask: [], plan: [] } }),
+  JSON.stringify({ version: 6, profiles: { normal: [] } }),
+  JSON.stringify({ version: 5, profiles: [] }),
+  JSON.stringify({ version: 5, profiles: { normal: [], plan: [] } }),
+  JSON.stringify({ version: 3, profiles: {} }),
+  JSON.stringify({ version: 1, permanentlyDisabledTools: "bash" }),
+  JSON.stringify({ version: 1 }),
+  "{}",
+  "null",
+]) {
+  await writeFile(file, invalid);
+  const loaded = await loadProfileConfig(file, defaults);
+  assert.ok(loaded.error, "invalid and unknown schemas must be reported");
+  assert.equal(loaded.migrated, false, "invalid files must never enter the automatic migration write path");
+  assert.deepEqual(loaded.config.profiles, { normal: [], ask: [], plan: [] });
+  if (loaded.migrated) await saveProfileConfig(file, loaded.config);
+  assert.equal(await readFile(file, "utf8"), invalid, "the original bytes must remain recoverable");
+}
+const invalidBytes = await readFile(file);
+const backupPath = await backupProfileConfig(file);
+assert.deepEqual(await readFile(backupPath), invalidBytes);
+assert.deepEqual(await readFile(file), invalidBytes, "backing up must not alter the original");
 
 await writeFile(file, JSON.stringify({ version: 1, permanentlyDisabledTools: ["custom"] }));
 const migratedV1 = await loadProfileConfig(file, defaults);
@@ -170,4 +202,4 @@ assert.ok(
 );
 
 await rm(root, { recursive: true, force: true });
-console.log("profile config v6 Web Search and Bash migration tests passed");
+console.log("profile config validation, recovery, and migration tests passed");

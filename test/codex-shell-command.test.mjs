@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -13,10 +13,26 @@ import {
   truncateMiddleWithTokenBudget,
   wrapShellCommandDefinition,
 } from "../src/codex-shell-command.js";
+import { formatCapturedOutputForModel } from "../src/codex-shell-output.js";
 
 assert.equal(CODEX_CAPTURE_MAX_BYTES, 1024 * 1024);
 assert.equal(CODEX_TOOL_OUTPUT_TOKEN_LIMIT, 10_000);
 assert.equal(CODEX_APPROX_BYTES_PER_TOKEN, 4);
+
+// Short streams must survive unchanged, including byte counts between tokens
+// and multibyte characters, whether emitted on stdout, stderr, or both.
+for (const text of ["x", "ok", "ok\n", "hello", "开", "😊", "开!!", "你好", "开😊"]) {
+  for (const [out, err] of [[text, ""], ["", text], [text, text]]) {
+    const result = formatCapturedOutputForModel(
+      { exitCode: 0, durationMs: 0, totalOutputBytes: Buffer.byteLength(out + err) },
+      Buffer.from(out),
+      Buffer.from(err),
+    );
+    assert.equal(result.truncated, false, `short output must fit: ${JSON.stringify([out, err])}`);
+    assert.equal(result.body, out + err);
+    assert.ok(result.text.endsWith(`Output:\n${out}${err}`));
+  }
+}
 
 const stdout = Buffer.alloc(CODEX_CAPTURE_MAX_BYTES, "s");
 const stderr = Buffer.alloc(CODEX_CAPTURE_MAX_BYTES, "e");
@@ -78,10 +94,14 @@ assert.deepEqual(wrappedApi.getActiveTools(), ["read"]);
 const temp = await mkdtemp(path.join(os.tmpdir(), "pi-only-tools-codex-limit-"));
 try {
   const bytesPerStream = CODEX_CAPTURE_MAX_BYTES + 256 * 1024;
-  const script =
-    `process.stdout.write("S".repeat(${bytesPerStream}));` +
-    `process.stderr.write("E".repeat(${bytesPerStream}));`;
-  const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+  const stdoutText = `STDOUT_HEAD${"S".repeat(bytesPerStream - 23)}STDOUT_TAIL!`;
+  const stderrText = `STDERR_HEAD${"E".repeat(bytesPerStream - 23)}STDERR_TAIL!`;
+  const scriptPath = path.join(temp, "large-output.cjs");
+  await writeFile(scriptPath, `process.stdout.write(${JSON.stringify(stdoutText)});process.stderr.write(${JSON.stringify(stderrText)});`);
+  const quote = (value) => process.platform === "win32"
+    ? `"${value.replaceAll('"', '\"')}"`
+    : `'${value.replaceAll("'", "'\\''")}'`;
+  const command = `${quote(process.execPath)} ${quote(scriptPath)}`;
   const updates = [];
   const result = await wrapped.execute(
     "shell-limit-test",
@@ -92,6 +112,7 @@ try {
   );
 
   assert.equal(result.details.exitCode, 0);
+  assert.equal(result.isError, false);
   assert.equal(result.details.totalStdoutBytes, bytesPerStream);
   assert.equal(result.details.totalStderrBytes, bytesPerStream);
   assert.equal(result.details.capturedStdoutBytes, CODEX_CAPTURE_MAX_BYTES);
@@ -109,10 +130,15 @@ try {
   assert.match(modelText, /Total output lines: 1\nOutput:\n/);
   assert.match(modelText, /…\d+ tokens truncated…/);
   assert.ok(modelText.includes("SSSS"));
-  assert.ok(modelText.endsWith("EEEE"));
+  for (const marker of ["STDOUT_HEAD", "STDOUT_TAIL!", "STDERR_HEAD", "STDERR_TAIL!"]) {
+    assert.ok(modelText.includes(marker), `${marker} must survive both capture and model truncation`);
+  }
+  assert.ok(result.details.stdout.endsWith("STDOUT_TAIL!"));
+  assert.ok(result.details.stderr.endsWith("STDERR_TAIL!"));
+  assert.ok(modelText.endsWith("STDERR_TAIL!"));
   assert.ok(
     Buffer.byteLength(modelText, "utf8") <=
-      CODEX_TOOL_OUTPUT_TOKEN_LIMIT * CODEX_APPROX_BYTES_PER_TOKEN + 256,
+      CODEX_TOOL_OUTPUT_TOKEN_LIMIT * CODEX_APPROX_BYTES_PER_TOKEN,
   );
 
   for (const update of updates) {

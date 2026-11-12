@@ -33,6 +33,9 @@ const registered = new Set([
 let activeTools = ["shell_command", "apply_patch"];
 let thinkingLevel = "medium";
 let sessionName = "plan-test";
+let idle = true;
+let releaseIdle;
+let waitForIdleCalls = 0;
 const models = new Map([
   ["base/base-model", { provider: "base", id: "base-model" }],
   ["planner/planner-model", { provider: "planner", id: "planner-model" }],
@@ -58,11 +61,14 @@ const ctx = {
   },
   scopedModels: [],
   thinkingLevel,
-  isIdle: () => true,
+  isIdle: () => idle,
   isProjectTrusted: () => true,
   hasPendingMessages: () => false,
   getSystemPrompt: () => "base prompt",
-  waitForIdle: async () => undefined,
+  waitForIdle: async () => {
+    waitForIdleCalls += 1;
+    if (!idle) await new Promise((resolve) => { releaseIdle = resolve; });
+  },
   newSession: async () => ({ cancelled: true }),
   ui: {
     theme: { fg: (_color, text) => text },
@@ -98,7 +104,7 @@ const pi = {
   registerCommand(name, command) { commands.set(name, command); },
   registerFlag() {},
   getFlag: () => false,
-  getAllTools: () => [...registered].map((name) => ({ name })),
+  getAllTools: () => [...registered].map((name) => tools.get(name) ?? { name }),
   getActiveTools: () => [...activeTools],
   setActiveTools: (names) => { activeTools = [...names]; },
   appendEntry(customType, data) { entries.push({ type: "custom", customType, data }); },
@@ -145,23 +151,23 @@ profiles.setProfile(
 profiles.setProfile("ask", ["read", "ask_user_question"], { apply: false });
 profiles.setProfile(
   "plan",
-  ["read", "ask_user_question", "plan_write", "ExitPlanMode"],
+  ["read", "ask_user_question", "plan_write", "ExitPlanMode", "mcp__late__read"],
   { apply: false },
 );
 profiles.activate("normal");
-const stableCatalog = [
-  "shell_command",
-  "apply_patch",
-  "read",
-  "ask_user_question",
-  "EnterPlanMode",
-  "plan_write",
-];
-assert.deepEqual(activeTools, stableCatalog);
+const normalTools = ["shell_command", "apply_patch", "EnterPlanMode"];
+const askTools = ["read", "ask_user_question"];
+const planTools = ["read", "ask_user_question", "plan_write"];
+function assertActive(expected, message) {
+  assert.deepEqual([...activeTools].sort(), [...expected].sort(), message);
+}
+assertActive(normalTools);
 assert.equal(plan.enabled, true);
 assert.equal(plan.getMode(), "normal");
 assert.deepEqual([...tools.keys()].sort(), ["EnterPlanMode", "plan_write"].sort());
 assert.equal(tools.has("ExitPlanMode"), false, "ExitPlanMode must not be registered for the model");
+assert.equal(tools.get("EnterPlanMode").exposure, "model-only");
+assert.equal(tools.get("plan_write").exposure, "model-only");
 assert.ok(commands.has("mode"), "the integrated runtime must register /mode");
 assert.equal(commands.has("ask"), false, "Ask must not expose a separate command");
 
@@ -169,6 +175,7 @@ async function emit(event, payload = {}) {
   let result;
   for (const handler of handlers.get(event) ?? []) {
     const next = await handler({ type: event, ...payload }, ctx);
+    if (event === "tool_call" && next?.block) return next;
     if (next !== undefined) result = next;
   }
   return result;
@@ -193,9 +200,9 @@ const terminalInputHandler = [...terminalInputHandlers][0];
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
 await waitForMode("ask");
 assert.equal(profiles.mode, "ask");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(askTools);
 let promptResult = await emit("before_agent_start", { systemPrompt: "base" });
-assert.match(promptResult.systemPrompt, /Pi exposes one stable tool catalog for the whole session\./);
+assert.match(promptResult.systemPrompt, /Pi manages tool declarations and records their changes in the conversation\./);
 assert.doesNotMatch(promptResult.systemPrompt, /PI-ONLY-TOOLS MODE PROTOCOL/);
 assert.match(promptResult.systemPrompt, /strictly read-only/);
 assert.doesNotMatch(promptResult.systemPrompt, /"mode": "ask"/);
@@ -211,17 +218,24 @@ assert.equal(await emit("tool_call", { toolName: "read" }), undefined);
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
 await waitForMode("plan");
 assert.equal(profiles.mode, "plan");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(planTools);
+assert.ok(profiles.getRequestedTools("plan").includes("mcp__late__read"),
+  "entering Plan must preserve explicit permissions for tools that are not registered yet");
+registered.add("mcp__late__read");
+profiles.apply();
+planTools.push("mcp__late__read");
+assertActive(planTools);
+assert.equal(await emit("tool_call", { toolName: "mcp__late__read" }), undefined);
 
 assert.deepEqual(terminalInputHandler("\u001b[Z"), { consume: true });
 await waitForMode("normal");
 assert.equal(profiles.mode, "normal");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(normalTools);
 
 await commands.get("plan").handler("on Inspect the review workflow", ctx);
 assert.equal(profiles.mode, "plan");
 assert.equal(plan.getMode(), "plan");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(planTools);
 assert.equal(ctx.model.provider, "planner");
 assert.equal(thinkingLevel, "high");
 
@@ -289,7 +303,7 @@ assert.equal(validResult.details.readiness.ready, true);
 assert.doesNotMatch(validResult.content[0].text, /# Make Plan approval/);
 assert.equal(entries.filter((entry) => entry.customType === PLAN_STATE_ENTRY).at(-1).data.stage, "ready");
 assert.equal(profiles.mode, "plan");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(planTools);
 stateMessage = await runtimeState();
 assert.match(stateMessage.content, /"workflowStage": "ready"/);
 assert.match(stateMessage.content, /"allowedTools": \[\]/);
@@ -307,7 +321,7 @@ assert.match(blockedExit.reason, /user-controlled/);
 await commands.get("plan-approve").handler("keep", ctx);
 assert.equal(plan.getStage(), "executing");
 assert.equal(profiles.mode, "normal");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(normalTools);
 assert.equal(ctx.model.provider, "normal");
 assert.equal(thinkingLevel, "xhigh");
 const handoff = sentMessages.find((entry) => entry.message?.customType === "claude-plan-mode-handoff");
@@ -318,9 +332,89 @@ assert.match(handoff.message.content, /<approved-plan/);
 await commands.get("plan").handler("finish", ctx);
 assert.equal(plan.getStage(), "idle");
 assert.equal(profiles.mode, "normal");
-assert.deepEqual(activeTools, stableCatalog);
+assertActive(normalTools);
+
+// Commands wait before changing state or removing Ask's active profile.
+await plan.enterAskMode(ctx, { notify: false });
+idle = false;
+let pendingCommand = commands.get("plan").handler("on", ctx);
+await Promise.resolve();
+assert.equal(typeof releaseIdle, "function");
+assert.equal(plan.getMode(), "ask");
+assert.equal(plan.getStage(), "idle");
+assertActive(askTools);
+idle = true;
+releaseIdle();
+await pendingCommand;
+assert.equal(plan.getStage(), "planning");
+assert.equal(plan.getMode(), "plan");
+
+idle = false;
+releaseIdle = undefined;
+pendingCommand = commands.get("plan").handler("off", ctx);
+await Promise.resolve();
+assert.equal(typeof releaseIdle, "function");
+assert.equal(plan.getStage(), "planning");
+assertActive(planTools);
+idle = true;
+releaseIdle();
+await pendingCommand;
+assert.equal(plan.getStage(), "idle");
+assertActive(normalTools);
+assert.equal(waitForIdleCalls, 2, "each busy command waits once before applying its mode change");
+
+// A model tool runs inside the active agent turn and must not wait on itself.
+idle = false;
+const enteredByTool = await tools.get("EnterPlanMode").execute(
+  "enter-from-model", { reason: "Validate model tool entry" }, undefined, undefined, ctx,
+);
+assert.equal(enteredByTool.details.entered, true);
+assert.equal(enteredByTool.terminate, true);
+assert.equal(waitForIdleCalls, 2);
+idle = true;
+
+await tools.get("plan_write").execute(
+  "publish-for-fresh-session", { content: validPlan, expected_revision: 1 }, undefined, undefined, ctx,
+);
+const readySnapshot = structuredClone(plan.getState().ready);
+idle = false;
+releaseIdle = undefined;
+pendingCommand = commands.get("plan-approve").handler("clear", ctx);
+await Promise.resolve();
+assert.equal(typeof releaseIdle, "function");
+assert.equal(plan.getStage(), "ready", "approval must wait for the current turn");
+idle = true;
+releaseIdle();
+await pendingCommand;
+assert.equal(plan.getStage(), "ready", "canceling fresh-session creation preserves readiness");
+assert.equal(plan.getState().ready.revision, readySnapshot.revision);
+assert.equal(plan.getState().ready.hash, readySnapshot.hash);
+
+const freshEntries = [];
+const freshMessages = [];
+ctx.newSession = async (options) => {
+  assert.equal(options.parentSession, sessionManager.getSessionFile());
+  await options.setup({
+    appendCustomEntry(customType, data) { freshEntries.push({ customType, data }); },
+    appendSessionInfo(name) { freshEntries.push({ name }); },
+  });
+  await options.withSession({
+    async sendMessage(message, options) { freshMessages.push({ message, options }); },
+  });
+  return { cancelled: false };
+};
+await commands.get("plan-approve").handler("clear", ctx);
+assert.equal(plan.getStage(), "handed_off");
+const executionEntry = freshEntries.find((entry) => entry.customType === PLAN_STATE_ENTRY);
+assert.equal(executionEntry.data.stage, "executing");
+assert.equal(executionEntry.data.approved.hash, readySnapshot.hash);
+assert.equal(freshMessages.length, 1);
+assert.equal(freshMessages[0].message.display, true,
+  "a fresh execution session must show its approved-plan handoff");
+assert.equal(freshMessages[0].options.triggerTurn, true);
+assert.match(freshMessages[0].message.content, /<approved-plan/);
 
 await emit("session_shutdown");
 assert.equal(terminalInputHandlers.size, 0);
 await rm(root, { recursive: true, force: true });
-console.log("Normal/Ask/Plan cache-stable workflow integration tests passed");
+console.log("Normal/Ask/Plan dynamic profiles, publication, command timing, and handoff tests passed");
